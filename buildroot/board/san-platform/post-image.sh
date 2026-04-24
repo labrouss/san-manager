@@ -2,95 +2,52 @@
 # =============================================================================
 # buildroot/board/san-platform/post-image.sh
 #
-# Runs after all filesystem images are built.
-# Uses genimage to assemble the final raw disk image with:
+# Called by Buildroot after all images are built.
+# Runs genimage using the static genimage.cfg to produce disk.img.
 #
-#   Partition layout (GPT):
-#   ┌─────────────────────────────────────────────────────────┐
-#   │ Part 1  FAT32 EFI   256 MiB  /boot/efi  (GRUB EFI)     │
-#   │ Part 2  ext4        3072 MiB /            (root)        │
-#   │ Part 3  ext4        4096 MiB /var/lib/san-platform (data│
-#   └─────────────────────────────────────────────────────────┘
+# Buildroot exports these environment variables:
+#   BINARIES_DIR  — output/images/   (input files + output destination)
+#   TARGET_DIR    — output/target/   (rootfs tree, used as rootpath)
+#   BUILD_DIR     — output/build/    (used for genimage tmp dir)
 #
-# Output: output/images/disk.img
+# Output: ${BINARIES_DIR}/disk.img
 # =============================================================================
 set -euo pipefail
 
-# Buildroot exports BINARIES_DIR, TARGET_DIR, BUILD_DIR as environment
-# variables when calling post-image scripts.
-: "${BINARIES_DIR:?BINARIES_DIR is not set — must be called by Buildroot make}"
-GENIMAGE_TMP="${BUILD_DIR:-/tmp}/genimage.tmp"
+: "${BINARIES_DIR:?BINARIES_DIR not set — must be called by Buildroot}"
+: "${TARGET_DIR:?TARGET_DIR not set — must be called by Buildroot}"
+: "${BUILD_DIR:?BUILD_DIR not set — must be called by Buildroot}"
+
+BOARD_DIR="$(dirname "$(realpath "$0")")"
+GENIMAGE_CFG="${BOARD_DIR}/genimage.cfg"
+GENIMAGE_TMP="${BUILD_DIR}/genimage.tmp"
 
 log() { echo "[post-image] $*"; }
 
-# ── Write genimage.cfg ────────────────────────────────────────────────────────
-GENIMAGE_CFG="${BINARIES_DIR}/genimage.cfg"
+log "BINARIES_DIR = ${BINARIES_DIR}"
+log "BOARD_DIR    = ${BOARD_DIR}"
+log "GENIMAGE_CFG = ${GENIMAGE_CFG}"
 
-cat > "${GENIMAGE_CFG}" << 'GENIMAGE'
-image efi.vfat {
-    vfat {
-        label = "EFI"
-        files = {
-            "EFI"
-        }
-    }
-    size = 256M
+[ -f "${GENIMAGE_CFG}" ] || {
+    echo "[post-image] ERROR: genimage.cfg not found at ${GENIMAGE_CFG}"
+    exit 1
 }
 
-image rootfs.ext4 {
-    ext4 {}
-    # size is set by BR2_TARGET_ROOTFS_EXT2_SIZE (3072M)
-}
+# GRUB2 EFI produces an EFI/ directory in BINARIES_DIR.
+# Log what's available so failures are easy to diagnose.
+log "Files in BINARIES_DIR before genimage:"
+ls -lh "${BINARIES_DIR}"
 
-image data.ext4 {
-    ext4 {
-        label = "san-data"
-    }
-    size = 4096M
-}
-
-image disk.img {
-    hdimage {
-        gpt = true
-    }
-
-    partition efi {
-        partition-type-uuid = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
-        bootable = true
-        image = "efi.vfat"
-    }
-
-    partition rootfs {
-        partition-type-uuid = "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
-        image = "rootfs.ext4"
-    }
-
-    partition data {
-        partition-type-uuid = "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
-        image = "data.ext4"
-    }
-}
-GENIMAGE
-
-log "genimage.cfg written"
-
-# ── Prepare EFI directory in BINARIES_DIR ─────────────────────────────────────
-if [ -d "${BINARIES_DIR}/efi-part" ]; then
-    cp -r "${BINARIES_DIR}/efi-part/." "${BINARIES_DIR}/EFI/"
-fi
-
-# ── Run genimage ──────────────────────────────────────────────────────────────
+# Clean up any previous genimage tmp dir
 rm -rf "${GENIMAGE_TMP}"
 
-log "Running genimage…"
+log "Running genimage..."
 genimage \
-    --config   "${GENIMAGE_CFG}" \
-    --rootpath "${TARGET_DIR}" \
-    --tmppath  "${GENIMAGE_TMP}" \
+    --config    "${GENIMAGE_CFG}" \
+    --rootpath  "${TARGET_DIR}" \
+    --tmppath   "${GENIMAGE_TMP}" \
     --inputpath "${BINARIES_DIR}" \
     --outputpath "${BINARIES_DIR}"
 
-log "Disk image created: ${BINARIES_DIR}/disk.img"
+log "disk.img created:"
 ls -lh "${BINARIES_DIR}/disk.img"
-
-log "post-image.sh completed"
