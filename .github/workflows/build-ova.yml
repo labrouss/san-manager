@@ -296,6 +296,11 @@ jobs:
           # $(BR2_EXTERNAL_SAN_PLATFORM_PATH) inside the defconfig and Makefiles.
           make BR2_EXTERNAL="${BR2_EXT}" san_platform_defconfig
 
+          # Silently accept defaults for any symbols not present in the defconfig.
+          # This eliminates "legacy configuration" warnings from renamed options
+          # and is equivalent to pressing Enter through every menuconfig prompt.
+          make BR2_EXTERNAL="${BR2_EXT}" olddefconfig
+
           echo "Active Buildroot config:"
           grep -E "^BR2_(LINUX_KERNEL|ROOTFS|TARGET_ARCH|PACKAGE_DOCKER|EXTERNAL)" .config | head -40
 
