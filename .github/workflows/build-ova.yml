@@ -1,0 +1,430 @@
+# =============================================================================
+# .github/workflows/build-ova.yml
+#
+# SAN Platform — Buildroot OVA Builder
+#
+# Pipeline stages:
+#   1. build-images   Build & export Docker images (backend, frontend)
+#                     using docker buildx bake for layer-cache efficiency.
+#   2. build-ova      Run inside a Buildroot Docker builder container:
+#                       a. Pull the Buildroot SDK
+#                       b. Apply the san-platform defconfig + overlay
+#                       c. Import the pre-built app images as tarballs
+#                       d. make all  →  produces a raw disk image
+#                       e. Convert raw → VMDK → package as OVA
+#   3. release        Upload the OVA as a GitHub Release asset (on tags).
+#
+# Secrets required (set in repo Settings → Secrets and variables → Actions):
+#   DOCKER_USERNAME   Docker Hub login (for rate-limit-free pulls)
+#   DOCKER_TOKEN      Docker Hub PAT
+#
+# Outputs:
+#   san-platform-<version>.ova   attached to the GitHub Release on tag push
+# =============================================================================
+
+name: Build Buildroot OVA
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      buildroot_version:
+        description: "Buildroot version (e.g. 2024.02)"
+        required: false
+        default: "2024.02.9"
+      debug_build:
+        description: "Enable debug shell on failure (true/false)"
+        required: false
+        default: "false"
+
+# ---------------------------------------------------------------------------
+# Global defaults
+# ---------------------------------------------------------------------------
+env:
+  BUILDROOT_VERSION: ${{ github.event.inputs.buildroot_version || '2024.02.9' }}
+  PLATFORM_NAME: san-platform
+  # Docker image names — must match docker-compose.yml build targets
+  BACKEND_IMAGE: san-platform/backend:latest
+  FRONTEND_IMAGE: san-platform/frontend:latest
+  # OVA disk layout (MiB)
+  DISK_SIZE_MB: 8192         # 8 GiB total disk for the VM
+  ROOT_SIZE_MB: 3072         # 3 GiB root FS partition
+  DATA_SIZE_MB: 4096         # 4 GiB data partition (pg_data + logs)
+
+# Only one concurrent OVA build per branch/tag
+concurrency:
+  group: ova-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ===========================================================================
+  # JOB 1: Build and export Docker images
+  # ===========================================================================
+  build-images:
+    name: "Build Docker Images"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      backend_digest: ${{ steps.export.outputs.backend_digest }}
+      frontend_digest: ${{ steps.export.outputs.frontend_digest }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute version string
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            BRANCH=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+            VERSION="${BRANCH}-${SHORT_SHA}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION}"
+
+      - name: Log in to Docker Hub (rate-limit avoidance)
+        if: ${{ env.DOCKER_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:buildx-stable-1
+
+      - name: Cache Docker build layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: buildx-${{ runner.os }}-${{ hashFiles('backend/Dockerfile', 'frontend/Dockerfile', 'backend/package-lock.json', 'frontend/package-lock.json') }}
+          restore-keys: |
+            buildx-${{ runner.os }}-
+
+      # ── Build backend ──────────────────────────────────────────────────────
+      - name: Build backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.BACKEND_IMAGE }}
+          build-args: |
+            NODE_ENV=production
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      # ── Build frontend ─────────────────────────────────────────────────────
+      - name: Build frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.FRONTEND_IMAGE }}
+          build-args: |
+            VITE_API_URL=/api
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      # Move cache to avoid ever-growing cache
+      - name: Rotate build cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      # ── Export images as tarballs for Buildroot to embed ──────────────────
+      - name: Export Docker images as tarballs
+        id: export
+        run: |
+          mkdir -p /tmp/docker-images
+
+          echo "Exporting backend image…"
+          docker save "${{ env.BACKEND_IMAGE }}" \
+            | gzip -9 > /tmp/docker-images/backend.tar.gz
+          BACKEND_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ env.BACKEND_IMAGE }}" 2>/dev/null \
+            || docker inspect --format='{{.Id}}' "${{ env.BACKEND_IMAGE }}")
+          echo "backend_digest=${BACKEND_DIGEST}" >> "$GITHUB_OUTPUT"
+
+          echo "Exporting frontend image…"
+          docker save "${{ env.FRONTEND_IMAGE }}" \
+            | gzip -9 > /tmp/docker-images/frontend.tar.gz
+          FRONTEND_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ env.FRONTEND_IMAGE }}" 2>/dev/null \
+            || docker inspect --format='{{.Id}}' "${{ env.FRONTEND_IMAGE }}")
+          echo "frontend_digest=${FRONTEND_DIGEST}" >> "$GITHUB_OUTPUT"
+
+          ls -lh /tmp/docker-images/
+
+      - name: Upload Docker image tarballs
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-images-${{ steps.version.outputs.version }}
+          path: /tmp/docker-images/
+          retention-days: 1
+          compression-level: 0   # already gzip-compressed
+
+  # ===========================================================================
+  # JOB 2: Build Buildroot OVA
+  # ===========================================================================
+  build-ova:
+    name: "Build Buildroot OVA"
+    runs-on: ubuntu-latest
+    needs: build-images
+    timeout-minutes: 180   # Buildroot full builds can take 2+ hours
+
+    env:
+      VERSION: ${{ needs.build-images.outputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Docker image tarballs
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images-${{ env.VERSION }}
+          path: /tmp/docker-images/
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            qemu-utils \
+            ovftool \
+            bc \
+            cpio \
+            rsync \
+            xorriso \
+            mtools \
+            dosfstools \
+            e2fsprogs \
+            parted \
+            kpartx
+          # ovftool may not be available on ubuntu-latest; use vmware's installer
+          # or fall back to manual OVF bundling (handled in pack-ova.sh)
+          which ovftool 2>/dev/null || echo "ovftool not found — will use manual OVF packing"
+
+      # ── Buildroot source cache ─────────────────────────────────────────────
+      - name: Cache Buildroot download directory
+        uses: actions/cache@v4
+        with:
+          path: buildroot-dl
+          key: buildroot-dl-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/configs/san_platform_defconfig') }}
+          restore-keys: |
+            buildroot-dl-${{ env.BUILDROOT_VERSION }}-
+            buildroot-dl-
+
+      - name: Cache Buildroot ccache
+        uses: actions/cache@v4
+        with:
+          path: buildroot-ccache
+          key: buildroot-ccache-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/configs/san_platform_defconfig') }}
+          restore-keys: |
+            buildroot-ccache-${{ env.BUILDROOT_VERSION }}-
+
+      # ── Fetch Buildroot ────────────────────────────────────────────────────
+      - name: Fetch Buildroot ${{ env.BUILDROOT_VERSION }}
+        run: |
+          BUILDROOT_URL="https://buildroot.org/downloads/buildroot-${BUILDROOT_VERSION}.tar.gz"
+          echo "Downloading ${BUILDROOT_URL}…"
+          curl -fsSL --retry 3 "${BUILDROOT_URL}" \
+            | tar -xz
+          echo "BUILDROOT_DIR=$(pwd)/buildroot-${BUILDROOT_VERSION}" >> "$GITHUB_ENV"
+
+      # ── Merge project overlay into Buildroot ───────────────────────────────
+      - name: Merge san-platform board files into Buildroot
+        run: |
+          BOARD_DIR="${BUILDROOT_DIR}/board/san-platform"
+          mkdir -p "${BOARD_DIR}"
+
+          # Copy our entire buildroot/ overlay into the Buildroot tree
+          rsync -av buildroot/ "${BUILDROOT_DIR}/"
+
+          echo "Board dir contents:"
+          find "${BOARD_DIR}" -type f | sort
+
+      # ── Copy Docker image tarballs into rootfs overlay ────────────────────
+      - name: Stage Docker images into rootfs overlay
+        run: |
+          IMG_DIR="${BUILDROOT_DIR}/board/san-platform/rootfs-overlay/opt/san-platform/images"
+          mkdir -p "${IMG_DIR}"
+          cp /tmp/docker-images/backend.tar.gz  "${IMG_DIR}/backend.tar.gz"
+          cp /tmp/docker-images/frontend.tar.gz "${IMG_DIR}/frontend.tar.gz"
+          ls -lh "${IMG_DIR}"
+
+      # ── Configure Buildroot ────────────────────────────────────────────────
+      - name: Configure Buildroot
+        run: |
+          cd "${BUILDROOT_DIR}"
+
+          # Link the DL cache from the Actions cache directory
+          if [ -d "${GITHUB_WORKSPACE}/buildroot-dl" ]; then
+            ln -sfn "${GITHUB_WORKSPACE}/buildroot-dl" dl
+          else
+            mkdir -p dl
+          fi
+
+          if [ -d "${GITHUB_WORKSPACE}/buildroot-ccache" ]; then
+            export CCACHE_DIR="${GITHUB_WORKSPACE}/buildroot-ccache"
+          fi
+
+          make san_platform_defconfig
+
+          echo "Active Buildroot config:"
+          grep -E "^BR2_(LINUX_KERNEL|ROOTFS|TARGET_ARCH|PACKAGE_DOCKER)" .config | head -30
+
+      # ── Build! ─────────────────────────────────────────────────────────────
+      - name: Run Buildroot make
+        run: |
+          cd "${BUILDROOT_DIR}"
+
+          export CCACHE_DIR="${GITHUB_WORKSPACE}/buildroot-ccache"
+          make all 2>&1 | tee /tmp/buildroot-build.log
+
+          echo "Build output:"
+          ls -lh output/images/
+
+      # ── Convert raw image → VMDK → OVA ────────────────────────────────────
+      - name: Package OVA
+        run: |
+          cd "${BUILDROOT_DIR}"
+
+          RAW_IMG="output/images/disk.img"
+          OVA_NAME="san-platform-${VERSION}.ova"
+
+          bash "${GITHUB_WORKSPACE}/scripts/pack-ova.sh" \
+            "${RAW_IMG}" \
+            "${GITHUB_WORKSPACE}/${OVA_NAME}" \
+            "${VERSION}" \
+            "${{ env.DISK_SIZE_MB }}"
+
+          ls -lh "${GITHUB_WORKSPACE}/${OVA_NAME}"
+          echo "OVA_PATH=${GITHUB_WORKSPACE}/${OVA_NAME}" >> "$GITHUB_ENV"
+          echo "OVA_NAME=${OVA_NAME}" >> "$GITHUB_ENV"
+
+      # ── Debug on failure ───────────────────────────────────────────────────
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildroot-build-log-${{ env.VERSION }}
+          path: /tmp/buildroot-build.log
+          retention-days: 7
+
+      - name: Debug shell on failure
+        if: failure() && github.event.inputs.debug_build == 'true'
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 30
+
+      # ── Upload OVA artifact ────────────────────────────────────────────────
+      - name: Upload OVA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.OVA_NAME }}
+          path: ${{ env.OVA_PATH }}
+          retention-days: 14
+          compression-level: 0   # OVAs are already compressed internally
+
+  # ===========================================================================
+  # JOB 3: GitHub Release (tags only)
+  # ===========================================================================
+  release:
+    name: "Publish GitHub Release"
+    runs-on: ubuntu-latest
+    needs: [build-images, build-ova]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    env:
+      VERSION: ${{ needs.build-images.outputs.version }}
+
+    steps:
+      - name: Checkout (for release notes)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download OVA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: san-platform-${{ env.VERSION }}.ova
+          path: /tmp/release/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          OVA_FILE=$(ls /tmp/release/*.ova)
+          OVA_SHA256=$(sha256sum "${OVA_FILE}" | awk '{print $1}')
+          OVA_SIZE=$(du -sh "${OVA_FILE}" | cut -f1)
+
+          cat > /tmp/release-notes.md << EOF
+          ## SAN Management Platform — ${VERSION}
+
+          ### What's in the OVA
+          | Component | Details |
+          |-----------|---------|
+          | Base OS | Buildroot Linux (musl libc) |
+          | Kernel | Linux 6.6 LTS |
+          | Runtime | Docker Engine (Moby) |
+          | App | san-platform frontend + backend + TimescaleDB |
+          | Auto-start | Systemd service on boot |
+
+          ### Deployment
+          \`\`\`bash
+          # 1. Import into VMware / ESXi / Workstation / Fusion
+          #    (VirtualBox: File → Import Appliance)
+          # 2. Boot the VM — the SAN platform starts automatically
+          # 3. Browse to: http://<vm-ip>:8080
+          # 4. Default login: admin / Admin1234!  ← change immediately!
+          \`\`\`
+
+          ### Checksums
+          | File | SHA-256 |
+          |------|---------|
+          | $(basename "${OVA_FILE}") | \`${OVA_SHA256}\` |
+
+          **File size:** ${OVA_SIZE}
+
+          ### Backend image digest
+          \`${{ needs.build-images.outputs.backend_digest }}\`
+
+          ### Frontend image digest
+          \`${{ needs.build-images.outputs.frontend_digest }}\`
+          EOF
+
+          echo "OVA_FILE=${OVA_FILE}" >> "$GITHUB_ENV"
+          echo "OVA_SHA256=${OVA_SHA256}" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "SAN Platform ${{ env.VERSION }}"
+          body_path: /tmp/release-notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          files: |
+            ${{ env.OVA_FILE }}
+
