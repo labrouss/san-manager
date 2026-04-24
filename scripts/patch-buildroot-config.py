@@ -100,7 +100,9 @@ required_present = [
 ]
 required_absent = [
     "BR2_INIT_BUSYBOX=y",
-    "BR2_TARGET_GRUB2_X86_EFI=y",
+    "BR2_TARGET_GRUB2_X86_EFI=y",          # wrong symbol name
+    "BR2_TARGET_GRUB2_I386_PC=y",           # selects HAS_LEGACY_BOOT → BR2_LEGACY
+    "BR2_TARGET_GRUB2_HAS_LEGACY_BOOT=y",   # the actual legacy trigger
     "BR2_LINUX_KERNEL_LATEST_VERSION=y",
     "BR2_LINUX_KERNEL_LATEST_LTS_6_6=y",
     "BR2_LEGACY=y",

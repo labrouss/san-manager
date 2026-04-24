@@ -40,10 +40,12 @@ BR2_LINUX_KERNEL_DEFCONFIG="x86_64"
 BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_SAN_PLATFORM_PATH)/board/san-platform/linux-docker.fragment"
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
 
-# ── Bootloader — BIOS (i386-pc) + UEFI (x86_64-efi) ─────────────────────────
-# BR2_TARGET_GRUB2_X86_64_EFI is the correct symbol (not X86_EFI)
+# ── Bootloader — UEFI only (EFI x86-64) ──────────────────────────────────────
+# BR2_TARGET_GRUB2_I386_PC is intentionally omitted: it selects
+# BR2_TARGET_GRUB2_HAS_LEGACY_BOOT which is a legacy symbol in 2024.02
+# and triggers the fatal BR2_LEGACY=y check. All modern hypervisors
+# (VMware ESXi, Workstation, Fusion, VirtualBox) support EFI boot.
 BR2_TARGET_GRUB2=y
-BR2_TARGET_GRUB2_I386_PC=y
 BR2_TARGET_GRUB2_X86_64_EFI=y
 
 # ── Root filesystem ───────────────────────────────────────────────────────────
