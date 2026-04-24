@@ -291,18 +291,33 @@ jobs:
             mkdir -p dl
           fi
 
-          # BR2_EXTERNAL points Buildroot at our out-of-tree board directory.
-          # This makes make <defconfig> search our configs/ dir and exposes
-          # $(BR2_EXTERNAL_SAN_PLATFORM_PATH) inside the defconfig and Makefiles.
+          # Load our defconfig via BR2_EXTERNAL
           make BR2_EXTERNAL="${BR2_EXT}" san_platform_defconfig
 
-          # Silently accept defaults for any symbols not present in the defconfig.
-          # This eliminates "legacy configuration" warnings from renamed options
-          # and is equivalent to pressing Enter through every menuconfig prompt.
+          # Silence defaults for any new symbols Buildroot added since the
+          # defconfig was written — equivalent to pressing Enter in menuconfig.
           make BR2_EXTERNAL="${BR2_EXT}" olddefconfig
 
-          echo "Active Buildroot config:"
-          grep -E "^BR2_(LINUX_KERNEL|ROOTFS|TARGET_ARCH|PACKAGE_DOCKER|EXTERNAL)" .config | head -40
+          # ── Diagnose legacy symbols BEFORE they cause make all to fail ──────
+          # Buildroot's Makefile.legacy lists every renamed/removed symbol.
+          # Print any matches so the log tells us exactly what to fix.
+          echo "=== Legacy symbol check ==="
+          if [ -f Makefile.legacy ]; then
+            # Extract the symbol names Buildroot checks for
+            grep -oP 'ifdef \K(BR2_\w+)' Makefile.legacy | sort -u > /tmp/legacy_syms.txt
+            echo "Checking $(wc -l < /tmp/legacy_syms.txt) legacy symbols against .config…"
+            while IFS= read -r sym; do
+              if grep -q "^${sym}=" .config 2>/dev/null; then
+                echo "  LEGACY HIT: ${sym}=$(grep "^${sym}=" .config | cut -d= -f2-)"
+              fi
+            done < /tmp/legacy_syms.txt
+            echo "=== End legacy symbol check ==="
+          else
+            echo "Makefile.legacy not found — skipping check"
+          fi
+
+          echo "=== Active Buildroot config (Docker + kernel + rootfs) ==="
+          grep -E "^BR2_(LINUX_KERNEL|ROOTFS|TARGET_ARCH|PACKAGE_DOCKER|EXTERNAL|INIT|TOOLCHAIN)" .config | sort
 
       # ── Build! ─────────────────────────────────────────────────────────────
       - name: Run Buildroot make
@@ -310,9 +325,6 @@ jobs:
           cd "${BUILDROOT_DIR}"
 
           export CCACHE_DIR="${GITHUB_WORKSPACE}/buildroot-ccache"
-          # BR2_EXTERNAL must be passed again on every make invocation after
-          # the first (it is stored in .br2-external.mk but the path must
-          # remain consistent).
           make BR2_EXTERNAL="${BR2_EXT}" all 2>&1 | tee /tmp/buildroot-build.log
 
           echo "Build output:"
@@ -337,12 +349,14 @@ jobs:
           echo "OVA_NAME=${OVA_NAME}" >> "$GITHUB_ENV"
 
       # ── Debug on failure ───────────────────────────────────────────────────
-      - name: Upload build log on failure
+      - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: buildroot-build-log-${{ env.VERSION }}
-          path: /tmp/buildroot-build.log
+          path: |
+            /tmp/buildroot-build.log
+            ${{ env.BUILDROOT_DIR }}/.config
           retention-days: 7
 
       - name: Debug shell on failure
