@@ -45,9 +45,10 @@ patches = {
     "BR2_PACKAGE_SYSTEMD_NETWORKD":  "y",
     "BR2_PACKAGE_SYSTEMD_RESOLVED":  "y",
 
-    # ── curl ─────────────────────────────────────────────────────────────────
-    # BR2_PACKAGE_CURL requires BR2_PACKAGE_LIBCURL as parent in 2024.02
-    "BR2_PACKAGE_LIBCURL":           "y",
+    # ── curl: BR2_PACKAGE_CURL is the legacy name — must not be present ─────────
+    # The correct symbols are BR2_PACKAGE_LIBCURL + BR2_PACKAGE_LIBCURL_CURL,
+    # which are set directly in the defconfig. Ensure the old name is gone.
+    "BR2_PACKAGE_CURL":              None,   # legacy name — disable if present
 
     # ── GRUB2 legacy string traps ─────────────────────────────────────────────
     # These unsplit string symbols trigger BR2_LEGACY if non-empty.
@@ -97,12 +98,14 @@ required_present = [
     "BR2_TOOLCHAIN_BUILDROOT_WCHAR=y",
     "BR2_TOOLCHAIN_BUILDROOT_TLS=y",
     "BR2_PACKAGE_LIBCURL=y",
+    "BR2_PACKAGE_LIBCURL_CURL=y",
 ]
 required_absent = [
     "BR2_INIT_BUSYBOX=y",
     "BR2_TARGET_GRUB2_X86_EFI=y",          # wrong symbol name
     "BR2_TARGET_GRUB2_I386_PC=y",           # selects HAS_LEGACY_BOOT → BR2_LEGACY
     "BR2_TARGET_GRUB2_HAS_LEGACY_BOOT=y",   # the actual legacy trigger
+    "BR2_PACKAGE_CURL=y",                    # legacy curl name → BR2_LEGACY
     "BR2_LINUX_KERNEL_LATEST_VERSION=y",
     "BR2_LINUX_KERNEL_LATEST_LTS_6_6=y",
     "BR2_LEGACY=y",
