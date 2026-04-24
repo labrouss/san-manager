@@ -1,10 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # buildroot/board/san-platform/post-image.sh
-#
-# Called by Buildroot after all images are built.
-# Produces disk.img via genimage.
-#
+# Produces disk.img via genimage. Called by Buildroot after make all.
 # Buildroot exports: BINARIES_DIR, TARGET_DIR, BUILD_DIR
 # =============================================================================
 set -euo pipefail
@@ -15,23 +12,22 @@ set -euo pipefail
 
 GENIMAGE_TMP="${BUILD_DIR}/genimage.tmp"
 
-log() { echo "[post-image] $*"; }
+log()  { echo "[post-image] $*"; }
+die()  { echo "[post-image] ERROR: $*" >&2; exit 1; }
 
-log "=== BINARIES_DIR contents ==="
+log "=== BINARIES_DIR full contents ==="
 find "${BINARIES_DIR}" | sort
 log "=== end ==="
 
-# ── Locate the EFI directory produced by GRUB2 ───────────────────────────────
-# Buildroot GRUB2 EFI puts its output in BINARIES_DIR/efi-part/EFI/
-# genimage needs files listed relative to --inputpath (BINARIES_DIR)
-EFI_DIR="${BINARIES_DIR}/efi-part"
-if [ ! -d "${EFI_DIR}" ]; then
-    log "ERROR: EFI directory not found at ${EFI_DIR}"
-    log "GRUB2 EFI build may have failed"
-    exit 1
-fi
+# ── Validate required inputs ──────────────────────────────────────────────────
+[ -d "${BINARIES_DIR}/efi-part/EFI" ] \
+    || die "efi-part/EFI directory missing — GRUB2 EFI build failed"
 
-# ── Write genimage.cfg referencing actual paths ───────────────────────────────
+# rootfs.ext4 is produced by BR2_TARGET_ROOTFS_EXT2=y + BR2_TARGET_ROOTFS_EXT2_4=y
+[ -f "${BINARIES_DIR}/rootfs.ext4" ] \
+    || die "rootfs.ext4 missing — ext4 rootfs build failed. Files: $(ls "${BINARIES_DIR}")"
+
+# ── Write genimage.cfg ────────────────────────────────────────────────────────
 GENIMAGE_CFG="${BINARIES_DIR}/genimage.cfg"
 cat > "${GENIMAGE_CFG}" << GENCFG
 image efi-part.vfat {
@@ -74,9 +70,9 @@ image disk.img {
 }
 GENCFG
 
-log "genimage.cfg written to ${GENIMAGE_CFG}"
+log "genimage.cfg written"
 
-# ── Run genimage ──────────────────────────────────────────────────────────────
+# ── Run genimage — capture stdout+stderr ──────────────────────────────────────
 rm -rf "${GENIMAGE_TMP}"
 
 log "Running genimage..."
@@ -85,7 +81,15 @@ genimage \
     --rootpath   "${TARGET_DIR}" \
     --tmppath    "${GENIMAGE_TMP}" \
     --inputpath  "${BINARIES_DIR}" \
-    --outputpath "${BINARIES_DIR}"
+    --outputpath "${BINARIES_DIR}" \
+    2>&1 | tee /tmp/genimage.log
+
+GENIMAGE_EXIT="${PIPESTATUS[0]}"
+if [ "${GENIMAGE_EXIT}" -ne 0 ]; then
+    log "genimage failed (exit ${GENIMAGE_EXIT}):"
+    cat /tmp/genimage.log >&2
+    exit "${GENIMAGE_EXIT}"
+fi
 
 log "=== Output ==="
 ls -lh "${BINARIES_DIR}/disk.img"

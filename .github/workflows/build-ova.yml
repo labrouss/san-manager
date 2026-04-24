@@ -356,7 +356,19 @@ jobs:
             export TARGET_DIR="${BUILDROOT_DIR}/output/target"
             export BUILD_DIR="${BUILDROOT_DIR}/output/build"
 
-            bash -x "${BR2_EXT}/board/san-platform/post-image.sh"
+            # Buildroot builds genimage as a host tool under output/host/bin/.
+            # Add it to PATH so post-image.sh can call it directly.
+            export PATH="${BUILDROOT_DIR}/output/host/bin:${PATH}"
+            echo "genimage path: $(which genimage || echo 'NOT FOUND')"
+
+            bash -x "${BR2_EXT}/board/san-platform/post-image.sh" || {
+              echo "=== post-image.sh FAILED ==="
+              echo "=== genimage log ==="
+              cat /tmp/genimage.log 2>/dev/null || echo "(no genimage log)"
+              echo "=== BINARIES_DIR after failure ==="
+              find output/images/ | sort
+              exit 1
+            }
 
             echo "=== BINARIES_DIR contents after post-image ==="
             find output/images/ | sort
