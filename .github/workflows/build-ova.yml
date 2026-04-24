@@ -303,6 +303,9 @@ jobs:
           # olddefconfig accepts defaults for all unset symbols without prompting.
           make BR2_EXTERNAL="${BR2_EXT}" olddefconfig
 
+          echo "=== Legacy trigger check (must be empty) ==="
+          grep "BR2_LEGACY" .config || echo "  OK: no BR2_LEGACY found"
+
           echo "=== Active config snapshot ==="
           grep -E "^BR2_(INIT|TOOLCHAIN_BUILDROOT_(WCHAR|TLS|MUSL|CXX)|PACKAGE_(DOCKER|SYSTEMD)|LINUX_KERNEL_LATEST)" .config | sort
 

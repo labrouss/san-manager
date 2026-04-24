@@ -49,6 +49,11 @@ patches = {
     # curl CLI requires libcurl as parent package in Buildroot 2024.02
     "BR2_PACKAGE_LIBCURL":           "y",
 
+    # Kernel — LATEST_VERSION is a legacy moving-target symbol removed in 2024.02.
+    # The correct symbol is BR2_LINUX_KERNEL_LATEST_LTS_6_6 for the 6.6.x series.
+    "BR2_LINUX_KERNEL_LATEST_VERSION":  None,
+    "BR2_LINUX_KERNEL_LATEST_LTS_6_6":  "y",
+
     # GRUB2 — clear legacy string symbols that trigger BR2_LEGACY if non-empty.
     # BR2_TARGET_GRUB2_BUILTIN_MODULES was split into _PC and _EFI variants;
     # the old unsplit string must be empty to avoid the legacy wrapper firing.
@@ -103,6 +108,23 @@ for sym, should_exist in checks.items():
         state = "absent" if should_exist else "present"
         print(f"  FAIL: {sym} is {state} (expected {'present' if should_exist else 'absent'})")
         errors += 1
+
+if errors:
+    print(f"\n{errors} verification failure(s) — aborting", file=sys.stderr)
+    sys.exit(1)
+
+# Final sanity check: BR2_LEGACY must NOT be set
+import re as _re
+legacy_match = _re.search(r'^BR2_LEGACY=y', final, _re.MULTILINE)
+if legacy_match:
+    print("\nFATAL: BR2_LEGACY=y is set in .config — a legacy symbol is still active!", file=sys.stderr)
+    # Print every line that might be a legacy trigger
+    for line in final.splitlines():
+        if "LEGACY" in line and "=y" in line:
+            print(f"  trigger: {line}", file=sys.stderr)
+    errors += 1
+else:
+    print("  OK  : BR2_LEGACY is not set")
 
 if errors:
     print(f"\n{errors} verification failure(s) — aborting", file=sys.stderr)
