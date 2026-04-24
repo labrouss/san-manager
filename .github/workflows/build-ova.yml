@@ -334,8 +334,34 @@ jobs:
           export CCACHE_DIR="${GITHUB_WORKSPACE}/buildroot-ccache"
           make BR2_EXTERNAL="${BR2_EXT}" all 2>&1 | tee /tmp/buildroot-build.log
 
-          echo "Build output:"
-          ls -lh output/images/
+          echo "=== Buildroot images after make all ==="
+          ls -lh output/images/ || echo "(images dir missing)"
+          echo "=== post-image log tail ==="
+          grep -i "post.image\|genimage\|disk\.img\|ERROR\|error"               /tmp/buildroot-build.log | tail -40 || true
+
+      # ── Run post-image explicitly if disk.img missing ─────────────────────
+      - name: Generate disk image
+        run: |
+          cd "${BUILDROOT_DIR}"
+
+          if [ -f "output/images/disk.img" ]; then
+            echo "disk.img already exists — skipping explicit post-image run"
+            ls -lh output/images/disk.img
+          else
+            echo "disk.img not found — running post-image.sh explicitly"
+            echo "=== BINARIES_DIR contents before post-image ==="
+            find output/images/ | sort
+
+            export BINARIES_DIR="${BUILDROOT_DIR}/output/images"
+            export TARGET_DIR="${BUILDROOT_DIR}/output/target"
+            export BUILD_DIR="${BUILDROOT_DIR}/output/build"
+
+            bash -x "${BR2_EXT}/board/san-platform/post-image.sh"
+
+            echo "=== BINARIES_DIR contents after post-image ==="
+            find output/images/ | sort
+            ls -lh output/images/disk.img
+          fi
 
       # ── Convert raw image → VMDK → OVA ────────────────────────────────────
       # ── Convert raw image → VMDK → OVA ────────────────────────────────────
