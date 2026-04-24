@@ -58,6 +58,9 @@ env:
   DISK_SIZE_MB: 8192         # 8 GiB total disk for the VM
   ROOT_SIZE_MB: 3072         # 3 GiB root FS partition
   DATA_SIZE_MB: 4096         # 4 GiB data partition (pg_data + logs)
+  # Opt into Node.js 24 for all JavaScript actions (silences Node 20
+  # deprecation warnings). Remove once upstream actions ship native Node 24.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 # Only one concurrent OVA build per branch/tag
 concurrency:
@@ -122,7 +125,7 @@ jobs:
 
       # ── Build backend ──────────────────────────────────────────────────────
       - name: Build backend image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./backend
           file: ./backend/Dockerfile
@@ -136,7 +139,7 @@ jobs:
 
       # ── Build frontend ─────────────────────────────────────────────────────
       - name: Build frontend image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./frontend
           file: ./frontend/Dockerfile

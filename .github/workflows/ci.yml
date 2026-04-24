@@ -27,6 +27,12 @@ on:
   pull_request:
     branches: [main, "release/**"]
 
+# Opt into Node.js 24 for all actions (avoids Node 20 deprecation warnings).
+# Remove once actions/checkout@v4, actions/setup-node@v4, etc. ship native
+# Node 24 support and this flag becomes the default.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   # ===========================================================================
   # Lint & type-check
@@ -103,7 +109,7 @@ jobs:
           restore-keys: buildx-ci-${{ runner.os }}-
 
       - name: Build backend image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./backend
           push: false
@@ -113,7 +119,7 @@ jobs:
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
 
       - name: Build frontend image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: false
