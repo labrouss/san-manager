@@ -16,8 +16,9 @@
 # =============================================================================
 set -euo pipefail
 
-BINARIES_DIR="${1}"       # output/images/
-TARGET_DIR="${2}"         # output/target/  (unused here but available)
+# Buildroot exports BINARIES_DIR, TARGET_DIR, BUILD_DIR as environment
+# variables when calling post-image scripts.
+: "${BINARIES_DIR:?BINARIES_DIR is not set — must be called by Buildroot make}"
 GENIMAGE_TMP="${BUILD_DIR:-/tmp}/genimage.tmp"
 
 log() { echo "[post-image] $*"; }

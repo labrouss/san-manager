@@ -14,8 +14,10 @@
 # =============================================================================
 set -euo pipefail
 
-TARGET_DIR="$1"
-# $2 is BR2_CONFIG — passed by Buildroot but not needed here
+# Buildroot exports TARGET_DIR, HOST_DIR, STAGING_DIR, BINARIES_DIR as
+# environment variables when calling post-build scripts. Do not use $1/$2.
+# Fail fast if the variable isn't set (means script was called incorrectly).
+: "${TARGET_DIR:?TARGET_DIR is not set — must be called by Buildroot make}"
 
 log() { echo "[post-build] $*"; }
 

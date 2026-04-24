@@ -256,26 +256,28 @@ jobs:
             | tar -xz
           echo "BUILDROOT_DIR=$(pwd)/buildroot-${BUILDROOT_VERSION}" >> "$GITHUB_ENV"
 
-      # ── Merge project overlay into Buildroot ───────────────────────────────
-      - name: Merge san-platform board files into Buildroot
+      # ── Set up BR2_EXTERNAL tree ──────────────────────────────────────────
+      # We keep our board files in a proper BR2_EXTERNAL tree (the repo's
+      # buildroot/ directory) rather than merging them into Buildroot's own
+      # source tree. This is the correct Buildroot workflow and ensures
+      # make <defconfig> can locate our configs/ and board/ directories.
+      - name: Set up BR2_EXTERNAL and stage Docker images
         run: |
-          BOARD_DIR="${BUILDROOT_DIR}/board/san-platform"
-          mkdir -p "${BOARD_DIR}"
+          BR2_EXT="${GITHUB_WORKSPACE}/buildroot"
 
-          # Copy our entire buildroot/ overlay into the Buildroot tree
-          rsync -av buildroot/ "${BUILDROOT_DIR}/"
-
-          echo "Board dir contents:"
-          find "${BOARD_DIR}" -type f | sort
-
-      # ── Copy Docker image tarballs into rootfs overlay ────────────────────
-      - name: Stage Docker images into rootfs overlay
-        run: |
-          IMG_DIR="${BUILDROOT_DIR}/board/san-platform/rootfs-overlay/opt/san-platform/images"
+          # Stage Docker image tarballs into the rootfs overlay so they get
+          # baked into the root filesystem image.
+          IMG_DIR="${BR2_EXT}/board/san-platform/rootfs-overlay/opt/san-platform/images"
           mkdir -p "${IMG_DIR}"
           cp /tmp/docker-images/backend.tar.gz  "${IMG_DIR}/backend.tar.gz"
           cp /tmp/docker-images/frontend.tar.gz "${IMG_DIR}/frontend.tar.gz"
           ls -lh "${IMG_DIR}"
+
+          # Persist the external tree path for subsequent steps
+          echo "BR2_EXT=${BR2_EXT}" >> "$GITHUB_ENV"
+
+          echo "BR2_EXTERNAL tree contents:"
+          find "${BR2_EXT}" -type f | sort
 
       # ── Configure Buildroot ────────────────────────────────────────────────
       - name: Configure Buildroot
@@ -289,14 +291,13 @@ jobs:
             mkdir -p dl
           fi
 
-          if [ -d "${GITHUB_WORKSPACE}/buildroot-ccache" ]; then
-            export CCACHE_DIR="${GITHUB_WORKSPACE}/buildroot-ccache"
-          fi
-
-          make san_platform_defconfig
+          # BR2_EXTERNAL points Buildroot at our out-of-tree board directory.
+          # This makes make <defconfig> search our configs/ dir and exposes
+          # $(BR2_EXTERNAL_SAN_PLATFORM_PATH) inside the defconfig and Makefiles.
+          make BR2_EXTERNAL="${BR2_EXT}" san_platform_defconfig
 
           echo "Active Buildroot config:"
-          grep -E "^BR2_(LINUX_KERNEL|ROOTFS|TARGET_ARCH|PACKAGE_DOCKER)" .config | head -30
+          grep -E "^BR2_(LINUX_KERNEL|ROOTFS|TARGET_ARCH|PACKAGE_DOCKER|EXTERNAL)" .config | head -40
 
       # ── Build! ─────────────────────────────────────────────────────────────
       - name: Run Buildroot make
@@ -304,7 +305,10 @@ jobs:
           cd "${BUILDROOT_DIR}"
 
           export CCACHE_DIR="${GITHUB_WORKSPACE}/buildroot-ccache"
-          make all 2>&1 | tee /tmp/buildroot-build.log
+          # BR2_EXTERNAL must be passed again on every make invocation after
+          # the first (it is stored in .br2-external.mk but the path must
+          # remain consistent).
+          make BR2_EXTERNAL="${BR2_EXT}" all 2>&1 | tee /tmp/buildroot-build.log
 
           echo "Build output:"
           ls -lh output/images/
