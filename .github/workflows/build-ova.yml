@@ -166,15 +166,16 @@ jobs:
           echo "Exporting backend image…"
           docker save "${{ env.BACKEND_IMAGE }}" \
             | gzip -9 > /tmp/docker-images/backend.tar.gz
-          BACKEND_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ env.BACKEND_IMAGE }}" 2>/dev/null \
-            || docker inspect --format='{{.Id}}' "${{ env.BACKEND_IMAGE }}")
+          # Locally-built images have no RepoDigest — fall back to the image ID.
+          # Both formats are sha256:... so we keep the full string as-is;
+          # it is safe to write to GITHUB_OUTPUT as a single-line key=value.
+          BACKEND_DIGEST=$(docker inspect --format='{{.Id}}' "${{ env.BACKEND_IMAGE }}")
           echo "backend_digest=${BACKEND_DIGEST}" >> "$GITHUB_OUTPUT"
 
           echo "Exporting frontend image…"
           docker save "${{ env.FRONTEND_IMAGE }}" \
             | gzip -9 > /tmp/docker-images/frontend.tar.gz
-          FRONTEND_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ env.FRONTEND_IMAGE }}" 2>/dev/null \
-            || docker inspect --format='{{.Id}}' "${{ env.FRONTEND_IMAGE }}")
+          FRONTEND_DIGEST=$(docker inspect --format='{{.Id}}' "${{ env.FRONTEND_IMAGE }}")
           echo "frontend_digest=${FRONTEND_DIGEST}" >> "$GITHUB_OUTPUT"
 
           ls -lh /tmp/docker-images/
@@ -430,4 +431,3 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
           files: |
             ${{ env.OVA_FILE }}
-
