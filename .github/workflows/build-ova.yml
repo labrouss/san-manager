@@ -223,7 +223,18 @@ jobs:
             dosfstools \
             e2fsprogs \
             parted \
-            kpartx
+            kpartx \
+            libelf-dev \
+            libssl-dev \
+            libncurses-dev \
+            flex \
+            bison \
+            python3 \
+            python3-pip
+          # libelf-dev    → Linux kernel objtool (fatal: gelf.h not found without it)
+          # libssl-dev    → BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL
+          # libncurses-dev → Buildroot menuconfig support
+          # flex/bison    → kernel Kconfig parser
           # ovftool is VMware-proprietary and not available in Ubuntu apt repos.
           # pack-ova.sh detects its absence and assembles the OVA manually
           # (qemu-img convert → VMDK, then tar the OVF + VMDK + manifest).
