@@ -48,6 +48,13 @@ patches = {
 
     # curl CLI requires libcurl as parent package in Buildroot 2024.02
     "BR2_PACKAGE_LIBCURL":           "y",
+
+    # GRUB2 — clear legacy string symbols that trigger BR2_LEGACY if non-empty.
+    # BR2_TARGET_GRUB2_BUILTIN_MODULES was split into _PC and _EFI variants;
+    # the old unsplit string must be empty to avoid the legacy wrapper firing.
+    # BR2_TARGET_GRUB2_BUILTIN_CONFIG was similarly split.
+    "BR2_TARGET_GRUB2_BUILTIN_MODULES": '""',
+    "BR2_TARGET_GRUB2_BUILTIN_CONFIG":  '""',
 }
 
 for sym, val in patches.items():
@@ -80,6 +87,8 @@ checks = {
     "BR2_TOOLCHAIN_BUILDROOT_WCHAR=y": True,
     "BR2_TOOLCHAIN_BUILDROOT_TLS=y":   True,
     "BR2_PACKAGE_LIBCURL=y":           True,
+    # GRUB2: old unsplit symbol must NOT be set to y (it's a legacy string trap)
+    "BR2_TARGET_GRUB2_X86_EFI=y":     False,  # wrong name — must not exist
 }
 
 with open(config_path) as f:
