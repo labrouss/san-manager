@@ -15,7 +15,7 @@
 set -euo pipefail
 
 TARGET_DIR="$1"
-BR2_CONFIG="$2"
+# $2 is BR2_CONFIG — passed by Buildroot but not needed here
 
 log() { echo "[post-build] $*"; }
 

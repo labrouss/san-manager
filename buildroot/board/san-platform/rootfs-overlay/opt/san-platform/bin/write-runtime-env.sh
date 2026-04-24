@@ -15,7 +15,6 @@ set -e
 
 ENV_FILE="/opt/san-platform/.env"
 SECRETS_DIR="/opt/san-platform/secrets"
-TEMPLATE="/opt/san-platform/.env.template"
 
 log() { echo "[san-platform] $*"; }
 

@@ -16,7 +16,6 @@
 # =============================================================================
 set -euo pipefail
 
-BOARD_DIR="$(dirname "$0")"
 BINARIES_DIR="${1}"       # output/images/
 TARGET_DIR="${2}"         # output/target/  (unused here but available)
 GENIMAGE_TMP="${BUILD_DIR:-/tmp}/genimage.tmp"
