@@ -1,0 +1,2 @@
+# buildroot/Config.in
+# Required stub for BR2_EXTERNAL — add any custom Kconfig options here.

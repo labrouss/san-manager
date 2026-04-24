@@ -1,0 +1,30 @@
+# =============================================================================
+# /etc/systemd/system/san-platform-firstboot.service
+#
+# Runs once on first boot to:
+#   1. Expand the root partition to fill available disk space (if the VM
+#      disk was enlarged in the hypervisor after OVA deployment).
+#   2. Create and format the data partition bind-mount directories.
+#   3. Set the hostname from DHCP / OVF properties if provided.
+#
+# Uses a stamp file so it only ever runs once.
+# =============================================================================
+
+[Unit]
+Description=SAN Platform first-boot initialization
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target san-platform-load.service
+
+ConditionPathExists=!/var/lib/san-platform/.firstboot-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/san-platform/bin/firstboot.sh
+StandardOutput=journal+console
+StandardError=journal+console
+SyslogIdentifier=san-firstboot
+
+[Install]
+WantedBy=sysinit.target

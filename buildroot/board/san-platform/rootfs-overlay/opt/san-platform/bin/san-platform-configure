@@ -1,0 +1,116 @@
+#!/bin/sh
+# =============================================================================
+# /opt/san-platform/bin/san-platform-configure
+#
+# Interactive helper for first-boot configuration of the SAN Platform appliance.
+# Run as root after first login.
+# =============================================================================
+set -e
+
+SECRETS_DIR="/opt/san-platform/secrets"
+ENV_FILE="/opt/san-platform/.env"
+
+RED='\033[0;31m'
+GRN='\033[0;32m'
+YLW='\033[1;33m'
+CYN='\033[0;36m'
+RST='\033[0m'
+
+banner() {
+    echo ""
+    echo "${CYN}══════════════════════════════════════════════════════${RST}"
+    echo "${CYN}    SAN Management Platform — First-Boot Configurator${RST}"
+    echo "${CYN}══════════════════════════════════════════════════════${RST}"
+    echo ""
+}
+
+prompt() {
+    # prompt <variable_name> <prompt_text> <default>
+    VAR="$1"; MSG="$2"; DEFAULT="$3"
+    printf "${YLW}%s${RST} [%s]: " "${MSG}" "${DEFAULT}"
+    read -r INPUT
+    eval "${VAR}=\"${INPUT:-${DEFAULT}}\""
+}
+
+prompt_password() {
+    VAR="$1"; MSG="$2"
+    printf "${YLW}%s${RST}: " "${MSG}"
+    stty -echo
+    read -r INPUT
+    stty echo
+    echo ""
+    eval "${VAR}=\"${INPUT}\""
+}
+
+write_secret() {
+    FILE="${SECRETS_DIR}/$1"
+    VALUE="$2"
+    echo "${VALUE}" > "${FILE}"
+    chmod 600 "${FILE}"
+    echo "  ${GRN}✓${RST} Saved to ${FILE}"
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+banner
+
+echo "This tool helps you configure the platform secrets before first use."
+echo "Press Enter to keep the default value shown in brackets."
+echo ""
+
+# ── Database password ─────────────────────────────────────────────────────────
+echo "${CYN}[1/3] Database Password${RST}"
+echo "  Used by PostgreSQL/TimescaleDB. Must match across restarts."
+prompt_password DB_PASS "New database password"
+if [ -z "${DB_PASS}" ]; then
+    echo "  ${YLW}Keeping existing db_password.txt${RST}"
+else
+    write_secret "db_password.txt" "${DB_PASS}"
+fi
+echo ""
+
+# ── MDS switch password ───────────────────────────────────────────────────────
+echo "${CYN}[2/3] MDS Switch Password${RST}"
+echo "  Password the backend uses to authenticate with your MDS 9000 switches."
+prompt_password MDS_PASS "MDS switch admin password"
+if [ -z "${MDS_PASS}" ]; then
+    echo "  ${YLW}Keeping existing mds_password.txt${RST}"
+else
+    write_secret "mds_password.txt" "${MDS_PASS}"
+fi
+echo ""
+
+# ── Admin UI password ─────────────────────────────────────────────────────────
+echo "${CYN}[3/3] Web UI Admin Password${RST}"
+echo "  Password for the 'admin' account in the browser UI."
+prompt_password ADMIN_PASS "Admin UI password"
+echo ""
+
+# ── Apply ─────────────────────────────────────────────────────────────────────
+echo "Applying configuration…"
+/opt/san-platform/bin/write-runtime-env.sh
+
+if [ -n "${ADMIN_PASS}" ]; then
+    # Patch the .env file's ADMIN_PASSWORD line
+    sed -i "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=${ADMIN_PASS}|" "${ENV_FILE}"
+    echo "  ${GRN}✓${RST} Admin password updated in ${ENV_FILE}"
+fi
+
+echo ""
+echo "${GRN}Configuration complete!${RST}"
+echo ""
+echo "Restart the platform to apply all changes:"
+echo "  ${CYN}systemctl restart san-platform${RST}"
+echo ""
+
+# Offer to restart now
+printf "Restart now? [y/N]: "
+read -r RESTART
+if [ "${RESTART}" = "y" ] || [ "${RESTART}" = "Y" ]; then
+    echo "Restarting san-platform…"
+    systemctl restart san-platform
+    echo ""
+    echo "Waiting for services to come up…"
+    sleep 5
+    systemctl status san-platform --no-pager || true
+fi
+echo ""

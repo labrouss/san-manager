@@ -1,0 +1,60 @@
+# =============================================================================
+# buildroot/board/san-platform/rootfs-overlay/etc/systemd/system/san-platform.service
+#
+# Starts the SAN Management Platform Docker Compose stack on every boot.
+#
+# Boot order:
+#   1. docker.service starts (containerd → dockerd)
+#   2. san-platform-load.service pre-loads saved images (if not already loaded)
+#   3. san-platform.service runs docker compose up -d
+#
+# The service is enabled by the post-build.sh script (symlinked into
+# multi-user.target.wants).
+# =============================================================================
+
+[Unit]
+Description=SAN Management Platform (Docker Compose)
+Documentation=https://github.com/your-org/san-platform
+After=docker.service network-online.target san-platform-load.service
+Wants=network-online.target
+Requires=docker.service san-platform-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/san-platform
+
+# Write a .env file with the machine's primary IP at each boot so the
+# backend CORS_ORIGIN is always correct.
+ExecStartPre=/opt/san-platform/bin/write-runtime-env.sh
+
+# Bring the stack up (idempotent — safe to run even if already running)
+ExecStart=/usr/bin/docker compose \
+    --env-file /opt/san-platform/.env \
+    up -d --remove-orphans
+
+# On explicit stop: tear down containers but keep named volumes (data safe)
+ExecStop=/usr/bin/docker compose \
+    --env-file /opt/san-platform/.env \
+    down --timeout 30
+
+# Reload = restart only changed containers
+ExecReload=/usr/bin/docker compose \
+    --env-file /opt/san-platform/.env \
+    up -d --remove-orphans
+
+# Give Docker time to pull / start containers
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+# Restart the service if docker compose exits non-zero on next boot
+Restart=on-failure
+RestartSec=10s
+
+# Log to journal (follow with: journalctl -u san-platform -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=san-platform
+
+[Install]
+WantedBy=multi-user.target

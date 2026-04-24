@@ -1,0 +1,142 @@
+# =============================================================================
+# /opt/san-platform/docker-compose.yml
+#
+# Production appliance version — identical to the development compose file
+# except:
+#   • Images are referenced by name (loaded from embedded tarballs)
+#   • No build: sections (images are pre-built)
+#   • Secrets use plain files from /opt/san-platform/secrets/
+#     (acceptable for a locked-down appliance VM)
+# =============================================================================
+
+networks:
+  db-net:
+    driver: bridge
+    internal: true
+  api-net:
+    driver: bridge
+    internal: true
+  switch-net:
+    driver: bridge
+
+volumes:
+  pg_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/san-platform/pg_data
+  backend_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/san-platform/logs
+
+secrets:
+  db_password:
+    file: /opt/san-platform/secrets/db_password.txt
+  mds_password:
+    file: /opt/san-platform/secrets/mds_password.txt
+
+services:
+  db:
+    image: san-platform/backend:latest   # TimescaleDB bundled inside backend image
+    # NOTE: The actual DB image is timescale/timescaledb:latest-pg16
+    # The correct image reference is set in the load script.
+    image: timescale/timescaledb:latest-pg16
+    container_name: san-db
+    restart: unless-stopped
+    networks:
+      - db-net
+    secrets:
+      - db_password
+    environment:
+      POSTGRES_USER: san_admin
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_DB: san_zoning
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - /opt/san-platform/db/init/01-timescale.sql:/docker-entrypoint-initdb.d/01-timescale.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U san_admin -d san_zoning"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    image: san-platform/backend:latest
+    container_name: san-backend
+    restart: unless-stopped
+    networks:
+      - db-net
+      - api-net
+      - switch-net
+    depends_on:
+      db:
+        condition: service_healthy
+    secrets:
+      - db_password
+      - mds_password
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      LOG_LEVEL: info
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: san_admin
+      DB_NAME: san_zoning
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      DATABASE_URL: ${DATABASE_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      MDS_USERNAME: ${MDS_USERNAME}
+      MDS_PASSWORD_FILE: /run/secrets/mds_password
+      MDS_PORT: ${MDS_PORT:-443}
+      MDS_SIMULATE: ${MDS_SIMULATE:-false}
+      SAN_SEED: ${SAN_SEED:-false}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES: ${JWT_EXPIRES:-8h}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin1234!}
+    volumes:
+      - backend_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  frontend:
+    image: san-platform/frontend:latest
+    container_name: san-frontend
+    restart: unless-stopped
+    networks:
+      - api-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

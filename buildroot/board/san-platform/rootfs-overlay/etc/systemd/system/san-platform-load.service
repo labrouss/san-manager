@@ -1,0 +1,27 @@
+# =============================================================================
+# rootfs-overlay/etc/systemd/system/san-platform-load.service
+#
+# On first boot (or after images are cleared), docker-load-images.sh
+# imports the pre-bundled .tar.gz tarballs into the local Docker daemon.
+# Subsequent boots skip this step (images already present).
+# =============================================================================
+
+[Unit]
+Description=Load SAN Platform Docker images from embedded tarballs
+After=docker.service
+Requires=docker.service
+ConditionPathExists=/opt/san-platform/images/backend.tar.gz
+# Skip if images were already loaded (stamp file written by the script)
+ConditionPathExists=!/var/lib/san-platform/.images-loaded
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/san-platform/bin/docker-load-images.sh
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=san-platform-load
+
+[Install]
+WantedBy=multi-user.target

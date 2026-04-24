@@ -1,0 +1,116 @@
+# =============================================================================
+# buildroot/configs/san_platform_defconfig
+#
+# Buildroot configuration for the SAN Management Platform OVA.
+#
+# Target:  x86_64 PC (BIOS + UEFI via GRUB2)
+# libc:    musl  (small, Docker-compatible)
+# Init:    systemd (required by Docker Engine)
+# Kernel:  Linux 6.6 LTS
+#
+# What this builds:
+#   • Minimal Linux root filesystem with Docker Engine
+#   • Pre-loaded san-platform Docker images (backend + frontend + db)
+#   • Systemd unit that starts docker-compose on boot
+#   • A raw disk image suitable for conversion to VMDK/OVA
+# =============================================================================
+
+# ── Architecture ──────────────────────────────────────────────────────────────
+BR2_x86_64=y
+BR2_x86_64_v2=y
+BR2_TARGET_OPTIMIZATION="-O2 -pipe"
+
+# ── Toolchain ─────────────────────────────────────────────────────────────────
+BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+BR2_GCC_VERSION_13_X=y
+BR2_BINUTILS_VERSION_2_41_X=y
+
+# ── System ────────────────────────────────────────────────────────────────────
+BR2_SYSTEM_DHCP="eth0"
+BR2_TARGET_GENERIC_HOSTNAME="san-platform"
+BR2_TARGET_GENERIC_ISSUE="SAN Management Platform"
+BR2_TARGET_TZ_INFO=y
+BR2_TARGET_LOCALTIME="UTC"
+
+# ── Init system (systemd — required by Docker) ────────────────────────────────
+BR2_INIT_SYSTEMD=y
+BR2_PACKAGE_SYSTEMD=y
+BR2_PACKAGE_SYSTEMD_NETWORKD=y
+BR2_PACKAGE_SYSTEMD_RESOLVED=y
+
+# ── Kernel ────────────────────────────────────────────────────────────────────
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_LATEST_LTS_VERSION=y
+BR2_LINUX_KERNEL_USE_DEFCONFIG=y
+BR2_LINUX_KERNEL_DEFCONFIG="x86_64"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_SAN_PATH)/board/san-platform/linux-docker.fragment"
+BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+
+# ── Bootloader (GRUB2 — works with both BIOS and UEFI) ───────────────────────
+BR2_TARGET_GRUB2=y
+BR2_TARGET_GRUB2_I386_PC=y
+BR2_TARGET_GRUB2_X86_EFI=y
+
+# ── Root filesystem ───────────────────────────────────────────────────────────
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="3072M"
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_SAN_PATH)/board/san-platform/rootfs-overlay"
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_SAN_PATH)/board/san-platform/post-build.sh"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_SAN_PATH)/board/san-platform/post-image.sh"
+BR2_ROOTFS_POST_SCRIPT_ARGS="$(BR2_CONFIG) $(BINARIES_DIR) $(TARGET_DIR)"
+
+# ── Disk image ────────────────────────────────────────────────────────────────
+BR2_PACKAGE_HOST_GENIMAGE=y
+# genimage config is applied in post-image.sh via genimage.cfg
+
+# ── Essential packages ────────────────────────────────────────────────────────
+# Core utilities
+BR2_PACKAGE_BUSYBOX=y
+BR2_PACKAGE_BASH=y
+BR2_PACKAGE_CURL=y
+BR2_PACKAGE_CA_CERTIFICATES=y
+BR2_PACKAGE_OPENSSL=y
+BR2_PACKAGE_OPENSSH=y
+BR2_PACKAGE_OPENSSH_SERVER=y
+
+# Filesystem & disk tools
+BR2_PACKAGE_E2FSPROGS=y
+BR2_PACKAGE_E2FSPROGS_RESIZE2FS=y
+BR2_PACKAGE_PARTED=y
+BR2_PACKAGE_UTIL_LINUX=y
+BR2_PACKAGE_UTIL_LINUX_MOUNT=y
+
+# Networking
+BR2_PACKAGE_IPTABLES=y
+BR2_PACKAGE_IP6TABLES=y
+BR2_PACKAGE_IPROUTE2=y
+BR2_PACKAGE_NFTABLES=y
+BR2_PACKAGE_BRIDGE_UTILS=y
+
+# Container runtime
+# Docker Engine (Moby) — brings in containerd + runc
+BR2_PACKAGE_DOCKER_ENGINE=y
+BR2_PACKAGE_DOCKER_ENGINE_DRIVER_OVERLAY2=y
+BR2_PACKAGE_DOCKER_CLI=y
+BR2_PACKAGE_DOCKER_COMPOSE=y
+BR2_PACKAGE_CONTAINERD=y
+
+# Chrony for time sync (recommended in VMs)
+BR2_PACKAGE_CHRONY=y
+
+# Misc tooling (useful for ops access via SSH)
+BR2_PACKAGE_HTOP=y
+BR2_PACKAGE_LESS=y
+BR2_PACKAGE_VIM_TINY=y
+BR2_PACKAGE_JQ=y
+
+# ── Host-side tools ───────────────────────────────────────────────────────────
+BR2_PACKAGE_HOST_DOSFSTOOLS=y
+BR2_PACKAGE_HOST_MTOOLS=y
+BR2_PACKAGE_HOST_PARTED=y
+
+# ── ccache ────────────────────────────────────────────────────────────────────
+BR2_CCACHE=y
+BR2_CCACHE_DIR="$(HOME)/.buildroot-ccache"

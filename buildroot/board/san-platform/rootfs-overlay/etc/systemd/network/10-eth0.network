@@ -1,0 +1,23 @@
+# =============================================================================
+# /etc/systemd/network/10-eth0.network
+#
+# DHCP on the primary Ethernet interface.
+# For static IP, change DHCP=yes → DHCP=no and add [Address]/[Route] sections.
+# After editing: networkctl reload
+# =============================================================================
+
+[Match]
+Name=eth0
+Type=ether
+
+[Network]
+DHCP=yes
+IPv6AcceptRA=yes
+
+# Expose the VM IP address in the journal for easy discovery
+EmitLLDP=customer-bridge
+
+[DHCP]
+UseDNS=yes
+UseNTP=yes
+RouteMetric=100
