@@ -1,0 +1,251 @@
+// =============================================================================
+// SAN Zoning & Alias Management — Prisma Schema
+// PostgreSQL + TimescaleDB extension
+// =============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+  // Bundle the native query engine for Alpine Linux (musl + OpenSSL 3.x).
+  // This prevents Prisma from trying to download the binary at runtime,
+  // which fails when the container has no internet access (internal: true).
+  binaryTargets   = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [timescaledb]
+}
+
+// ---------------------------------------------------------------------------
+// Switch inventory
+// ---------------------------------------------------------------------------
+
+model Switch {
+  id           String    @id @default(uuid())
+  ipAddress    String    @unique @map("ip_address")
+  hostname     String?
+  displayName  String?   @map("display_name")   // user-assigned friendly name e.g. "Upper Switch"
+  notes        String?                           // free-text notes for operators
+  serialNumber String?   @map("serial_number")
+  model        String?
+  nxosVersion  String?   @map("nxos_version")
+  isActive     Boolean   @default(true) @map("is_active")
+  lastSeenAt   DateTime? @map("last_seen_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  fcAliases       FcAlias[]
+  zones           Zone[]
+  zoneSets        ZoneSet[]
+  zoningSnapshots ZoningSnapshot[]
+  portMetrics     PortMetrics[]
+
+  @@map("switches")
+}
+
+// ---------------------------------------------------------------------------
+// FC Alias  (maps a WWN to a human-readable name — stored locally AND pushed
+//            to the switch as a device-alias)
+// ---------------------------------------------------------------------------
+
+model FcAlias {
+  id          String   @id @default(uuid())
+  switchId    String   @map("switch_id")
+  name        String                       // e.g. "DB_Server_HBA_A"
+  wwn         String                       // e.g. "21:00:00:24:ff:8a:1b:2c"
+  description String?
+  syncedAt    DateTime? @map("synced_at") // last time pushed to switch
+  isOrphaned  Boolean  @default(false) @map("is_orphaned") // WWN seen on switch with no local alias
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  switch      Switch   @relation(fields: [switchId], references: [id], onDelete: Cascade)
+
+  @@unique([switchId, wwn])
+  @@unique([switchId, name])
+  @@index([switchId])
+  @@map("fc_aliases")
+}
+
+// ---------------------------------------------------------------------------
+// Zone  (a named group of WWNs/aliases within a VSAN)
+// ---------------------------------------------------------------------------
+
+model Zone {
+  id          String   @id @default(uuid())
+  switchId    String   @map("switch_id")
+  name        String                       // e.g. "Zone_DB_to_Storage_A"
+  vsanId      Int      @map("vsan_id")
+  description String?
+  isDraft     Boolean  @default(true) @map("is_draft")  // true = local-only, not yet committed
+  syncedAt    DateTime? @map("synced_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  switch      Switch       @relation(fields: [switchId], references: [id], onDelete: Cascade)
+  members     ZoneMember[]
+  zoneSets    ZoneSetMember[]
+
+  @@unique([switchId, name, vsanId])
+  @@index([switchId, vsanId])
+  @@map("zones")
+}
+
+// ---------------------------------------------------------------------------
+// Zone Member  (a WWN or alias that belongs to a Zone)
+// ---------------------------------------------------------------------------
+
+model ZoneMember {
+  id          String           @id @default(uuid())
+  zoneId      String           @map("zone_id")
+  memberType  ZoneMemberType   @default(PWWN) @map("member_type")
+  value       String                          // WWN or alias name
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  zone        Zone             @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  @@unique([zoneId, value])
+  @@map("zone_members")
+}
+
+// ---------------------------------------------------------------------------
+// ZoneSet  (a named collection of Zones; only one can be active per VSAN)
+// ---------------------------------------------------------------------------
+
+model ZoneSet {
+  id          String   @id @default(uuid())
+  switchId    String   @map("switch_id")
+  name        String                       // e.g. "Production_ZoneSet"
+  vsanId      Int      @map("vsan_id")
+  isActive    Boolean  @default(false) @map("is_active")   // Switch "effective" state
+  isDraft     Boolean  @default(true) @map("is_draft")     // Local draft, not yet pushed
+  activatedAt DateTime? @map("activated_at")
+  syncedAt    DateTime? @map("synced_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  switch      Switch          @relation(fields: [switchId], references: [id], onDelete: Cascade)
+  members     ZoneSetMember[]
+
+  @@unique([switchId, name, vsanId])
+  @@index([switchId, vsanId, isActive])
+  @@map("zone_sets")
+}
+
+// ---------------------------------------------------------------------------
+// ZoneSetMember  (join between ZoneSet and Zone)
+// ---------------------------------------------------------------------------
+
+model ZoneSetMember {
+  zoneSetId   String   @map("zone_set_id")
+  zoneId      String   @map("zone_id")
+  addedAt     DateTime @default(now()) @map("added_at")
+
+  zoneSet     ZoneSet  @relation(fields: [zoneSetId], references: [id], onDelete: Cascade)
+  zone        Zone     @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  @@id([zoneSetId, zoneId])
+  @@map("zone_set_members")
+}
+
+// ---------------------------------------------------------------------------
+// ZoningSnapshot  — versioned JSON backup of the switch's full zoning database
+//                   automatically written before every commit operation
+// ---------------------------------------------------------------------------
+
+model ZoningSnapshot {
+  id          String           @id @default(uuid())
+  switchId    String           @map("switch_id")
+  vsanId      Int              @map("vsan_id")
+  trigger     SnapshotTrigger  @default(MANUAL)
+  // Complete zoning DB as returned by "show zoneset" — stored as raw JSON
+  payload     Json
+  // Optional: the diff summary (what changed versus previous snapshot)
+  diffSummary Json?            @map("diff_summary")
+  // Who triggered it (will be populated once auth is added)
+  triggeredBy String?          @map("triggered_by")
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  switch      Switch           @relation(fields: [switchId], references: [id], onDelete: Cascade)
+
+  @@index([switchId, vsanId, createdAt(sort: Desc)])
+  @@map("zoning_snapshots")
+}
+
+// ---------------------------------------------------------------------------
+// PortMetrics — TimescaleDB hypertable for time-series telemetry
+// After migrate run: SELECT create_hypertable('port_metrics','timestamp');
+// ---------------------------------------------------------------------------
+
+model PortMetrics {
+  timestamp    DateTime @default(now())
+  switchId     String   @map("switch_id")
+  interfaceName String  @map("interface_name") // e.g. "fc1/1"
+
+  // Counters (raw cumulative since boot)
+  txBytes      BigInt   @default(0) @map("tx_bytes")
+  rxBytes      BigInt   @default(0) @map("rx_bytes")
+  crcErrors    BigInt   @default(0) @map("crc_errors")
+  linkFailures BigInt   @default(0) @map("link_failures")
+
+  // Computed rates (bytes/sec, derived from deltas in poller)
+  txRateBps    Float?   @map("tx_rate_bps")
+  rxRateBps    Float?   @map("rx_rate_bps")
+
+  // SFP / DDMI diagnostics
+  rxPowerDbm   Float?   @map("rx_power_dbm")
+  txPowerDbm   Float?   @map("tx_power_dbm")
+  temperature  Float?
+  voltage      Float?
+  current      Float?
+
+  switch       Switch   @relation(fields: [switchId], references: [id], onDelete: Cascade)
+
+  @@id([timestamp, switchId, interfaceName])
+  @@index([switchId, interfaceName, timestamp(sort: Desc)])
+  @@map("port_metrics")
+}
+
+
+// ---------------------------------------------------------------------------
+// User  (authentication)
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  username     String    @unique
+  passwordHash String    @map("password_hash")
+  role         UserRole  @default(OPERATOR)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum ZoneMemberType {
+  PWWN        // Port WWN (most common)
+  DEVICE_ALIAS // Device alias name
+  FCID        // FC address (rare)
+}
+
+enum SnapshotTrigger {
+  PRE_COMMIT   // Automatic — before a zone commit
+  MANUAL       // User requested snapshot
+  SCHEDULED    // Poller-triggered periodic backup
+}
+
+enum UserRole {
+  ADMIN      // Full access including user management
+  OPERATOR   // Can manage switches, zones, aliases — no user management
+  VIEWER     // Read-only access
+}
+

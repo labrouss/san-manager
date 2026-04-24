@@ -1,0 +1,273 @@
+# =============================================================================
+# docker-compose.yml — SAN Management Platform
+#
+# Three fully-isolated services, each on its own Docker image:
+#
+#   db        timescale/timescaledb:latest-pg16
+#             ↳ private network only; never exposed to the host by default
+#
+#   backend   node:20-alpine (multi-stage build)
+#             ↳ Express API + Prisma + MdsPoller
+#             ↳ connects to db via "db-net" (internal)
+#             ↳ exposes :3001 on "api-net" for frontend proxy
+#
+#   frontend  nginx:1.27-alpine (multi-stage build)
+#             ↳ React SPA + nginx reverse-proxy for /api/*
+#             ↳ connects to backend via "api-net" (internal)
+#             ↳ only publicly exposed container (port 8080 → host)
+#
+# Networks
+#   db-net      backend ↔ db           (internal — DB isolated)
+#   api-net     frontend ↔ backend    (internal — frontend can't reach DB)
+#   switch-net  backend only           (outbound LAN access to real MDS switches)
+#
+# Volumes
+#   pg_data         Postgres data directory
+#   backend_logs    Persisted API logs
+#
+# Secrets (Docker secrets — values come from ./secrets/ files)
+#   db_password     Postgres password
+#   mds_password    MDS switch admin password
+# =============================================================================
+
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  db-net:
+    driver: bridge
+    internal: true          # No direct internet access for DB layer
+
+  api-net:
+    driver: bridge
+    internal: true          # No direct internet access for API layer
+
+  switch-net:
+    driver: bridge
+    # NOT internal — backend needs outbound access to reach real MDS switches
+    # via NX-API (HTTPS). The DB remains fully isolated on db-net.
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  pg_data:
+    driver: local
+  backend_logs:
+    driver: local
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+# Create the secret files before first run:
+#   mkdir -p secrets
+#   echo "san_secret"            > secrets/db_password.txt
+#   echo "your_mds_password"     > secrets/mds_password.txt
+#   chmod 600 secrets/*.txt
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  mds_password:
+    file: ./secrets/mds_password.txt
+
+# ── Services ──────────────────────────────────────────────────────────────────
+services:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # DATABASE  —  TimescaleDB (PostgreSQL 16 + timescaledb extension)
+  # Image:    timescale/timescaledb:latest-pg16   (official, ~150 MB)
+  # Network:  db-net only (never reachable from frontend or internet)
+  # ────────────────────────────────────────────────────────────────────────────
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: san-db
+    restart: unless-stopped
+    networks:
+      - db-net
+
+    secrets:
+      - db_password
+
+    environment:
+      POSTGRES_USER:     san_admin
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_DB:       san_zoning
+      # Performance tuning (matches 02-hypertable.sql ALTER SYSTEM settings)
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+
+    volumes:
+      # Persistent data
+      - pg_data:/var/lib/postgresql/data
+      # Auto-run on first boot: creates TimescaleDB extension + grants
+      - ./db/init/01-timescale.sql:/docker-entrypoint-initdb.d/01-timescale.sql:ro
+
+    # Port intentionally NOT published to the host.
+    # Only the backend can reach it via db-net.
+    # Uncomment the line below ONLY for local debugging:
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U san_admin -d san_zoning"]
+      interval: 10s
+      timeout:  5s
+      retries:  10
+      start_period: 20s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus:   "1.0"
+          memory: 512M
+        reservations:
+          memory: 256M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # BACKEND  —  Node.js 20 / Express API + Prisma ORM + MDS poller
+  # Image:    Built from ./backend/Dockerfile (multi-stage, ~120 MB)
+  # Networks: db-net (to reach DB) + api-net (to serve frontend)
+  # ────────────────────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context:    ./backend
+      dockerfile: Dockerfile
+      args:
+        NODE_ENV: production
+    image: san-platform/backend:latest
+    container_name: san-backend
+    restart: unless-stopped
+    networks:
+      - db-net
+      - api-net
+      - switch-net   # Outbound LAN/internet access for NX-API calls to real switches
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    secrets:
+      - db_password
+      - mds_password
+
+    environment:
+      NODE_ENV:    production
+      PORT:        3001
+      LOG_LEVEL:   info
+
+      # DB connection — reads password from Docker secret at runtime
+      DB_HOST:     db
+      DB_PORT:     5432
+      DB_USER:     san_admin
+      DB_NAME:     san_zoning
+      DB_PASSWORD_FILE: /run/secrets/db_password
+
+      # Prisma DSN constructed dynamically in docker-entrypoint.sh
+      # (Cannot use _FILE suffix directly in Prisma — entrypoint exports it)
+      DATABASE_URL: postgresql://san_admin:san_secret@db:5432/san_zoning
+
+      # CORS — only the nginx frontend container needs to call the API
+      # Use the frontend's internal hostname on api-net
+      CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-8080}
+
+      # MDS switch credentials — password read from Docker secret
+      MDS_USERNAME:      admin
+      MDS_PASSWORD_FILE: /run/secrets/mds_password
+      MDS_PORT:          443
+
+      # Set to "true" to seed demo data on first boot
+      SAN_SEED: ${SAN_SEED:-false}
+
+      # Authentication
+      # IMPORTANT: Change JWT_SECRET to a long random string in production!
+      JWT_SECRET:      ${JWT_SECRET:-san-platform-change-this-secret}
+      JWT_EXPIRES:     ${JWT_EXPIRES:-8h}
+      # Default admin password created on first boot (change immediately after login)
+      ADMIN_PASSWORD:  ${ADMIN_PASSWORD:-Admin1234!}
+
+      # Set to "true" to use the built-in MDS simulator (no real switch needed)
+      MDS_SIMULATE: ${MDS_SIMULATE:-false}
+
+    volumes:
+      - backend_logs:/app/logs
+
+    # Port intentionally NOT published to the host.
+    # Only the frontend nginx can reach it via api-net.
+    # Uncomment ONLY for local debugging:
+    # ports:
+    #   - "127.0.0.1:3001:3001"
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 30s
+      timeout:  10s
+      retries:  5
+      start_period: 60s
+
+    deploy:
+      resources:
+        limits:
+          cpus:   "1.0"
+          memory: 512M
+        reservations:
+          memory: 128M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # FRONTEND  —  React SPA served by nginx, with /api/* proxy to backend
+  # Image:    Built from ./frontend/Dockerfile (multi-stage, ~25 MB)
+  # Network:  api-net only (cannot reach DB directly)
+  # Exposed:  Port 8080 on the host (only publicly accessible container)
+  # ────────────────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context:    ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Must be a path the BROWSER can reach — /api is proxied by nginx
+        # to backend:3001. Do NOT use http://backend:3001 here — the browser
+        # cannot resolve the Docker-internal hostname.
+        VITE_API_URL: /api
+    image: san-platform/frontend:latest
+    container_name: san-frontend
+    restart: unless-stopped
+    networks:
+      - api-net
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    ports:
+      # Only this container is exposed to the outside world.
+      # Change "8080:8080" to e.g. "80:8080" when behind a load balancer.
+      - "${FRONTEND_PORT:-8080}:8080"
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 20s
+      timeout:  5s
+      retries:  3
+      start_period: 10s
+
+    deploy:
+      resources:
+        limits:
+          cpus:   "0.5"
+          memory: 64M
+        reservations:
+          memory: 32M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
