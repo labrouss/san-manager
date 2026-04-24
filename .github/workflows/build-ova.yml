@@ -338,23 +338,31 @@ jobs:
           ls -lh output/images/
 
       # ── Convert raw image → VMDK → OVA ────────────────────────────────────
+      # ── Convert raw image → VMDK → OVA ────────────────────────────────────
       - name: Package OVA
         run: |
-          cd "${BUILDROOT_DIR}"
-
-          RAW_IMG="output/images/disk.img"
+          # Use absolute paths — pack-ova.sh must not depend on cwd
+          RAW_IMG="${BUILDROOT_DIR}/output/images/disk.img"
           OVA_NAME="san-platform-${VERSION}.ova"
+          OVA_PATH="${GITHUB_WORKSPACE}/${OVA_NAME}"
+
+          echo "=== Buildroot output images ==="
+          ls -lh "${BUILDROOT_DIR}/output/images/" || echo "(images dir not found)"
+
+          [ -f "${RAW_IMG}" ] || {
+            echo "ERROR: disk.img not found at ${RAW_IMG}"
+            exit 1
+          }
 
           bash "${GITHUB_WORKSPACE}/scripts/pack-ova.sh" \
             "${RAW_IMG}" \
-            "${GITHUB_WORKSPACE}/${OVA_NAME}" \
+            "${OVA_PATH}" \
             "${VERSION}" \
             "${{ env.DISK_SIZE_MB }}"
 
-          ls -lh "${GITHUB_WORKSPACE}/${OVA_NAME}"
-          echo "OVA_PATH=${GITHUB_WORKSPACE}/${OVA_NAME}" >> "$GITHUB_ENV"
+          ls -lh "${OVA_PATH}"
+          echo "OVA_PATH=${OVA_PATH}" >> "$GITHUB_ENV"
           echo "OVA_NAME=${OVA_NAME}" >> "$GITHUB_ENV"
-
       # ── Debug on failure ───────────────────────────────────────────────────
       - name: Upload build logs on failure
         if: failure()
