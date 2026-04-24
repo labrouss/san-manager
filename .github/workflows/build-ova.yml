@@ -291,11 +291,88 @@ jobs:
             mkdir -p dl
           fi
 
-          # Load our defconfig via BR2_EXTERNAL
+          # Step 1: Load our defconfig via BR2_EXTERNAL.
+          # This writes an initial .config — some dependent symbols may not
+          # yet be set because defconfig loading is order-sensitive.
           make BR2_EXTERNAL="${BR2_EXT}" san_platform_defconfig
 
-          echo "=== Active Buildroot config (init + docker + kernel + rootfs) ==="
-          grep -E "^BR2_(LINUX_KERNEL|ROOTFS|TARGET_ARCH|PACKAGE_DOCKER|EXTERNAL|INIT|TOOLCHAIN_BUILDROOT_)" .config | sort
+          # Step 2: Patch .config directly to force the symbols that the
+          # defconfig loader silently drops due to unresolved dependencies.
+          # Using sed on .config is the standard Buildroot CI practice when
+          # defconfig ordering cannot satisfy all Kconfig dependency rules.
+          python3 - << 'PYEOF'
+          import re, sys
+
+          config = open(".config").read()
+
+          patches = {
+              # Toolchain — wchar + TLS required by systemd (musl doesn't enable by default)
+              "BR2_TOOLCHAIN_BUILDROOT_WCHAR":   "y",
+              "BR2_TOOLCHAIN_BUILDROOT_TLS":     "y",
+              # Init system — must be systemd, not busybox
+              "BR2_INIT_BUSYBOX":                None,   # None = comment out
+              "BR2_INIT_SYSTEMD":                "y",
+              "BR2_PACKAGE_SYSTEMD":             "y",
+              "BR2_PACKAGE_SYSTEMD_NETWORKD":    "y",
+              "BR2_PACKAGE_SYSTEMD_RESOLVED":    "y",
+              # curl CLI requires libcurl parent in 2024.02
+              "BR2_PACKAGE_LIBCURL":             "y",
+          }
+
+          for sym, val in patches.items():
+              pattern = re.compile(r'^(# )?' + re.escape(sym) + r'[= ].*$', re.MULTILINE)
+              if val is None:
+                  # Comment out (disable)
+                  replacement = f"# {sym} is not set"
+              else:
+                  replacement = f"{sym}={val}"
+
+              if pattern.search(config):
+                  config = pattern.sub(replacement, config)
+                  print(f"  patched: {replacement}")
+              else:
+                  # Symbol not present at all — append it
+                  config += f"
+{replacement}
+"
+                  print(f"  appended: {replacement}")
+
+          open(".config", "w").write(config)
+          print("Done.")
+          PYEOF
+
+          # Step 3: Run olddefconfig to propagate the forced values through
+          # the full Kconfig dependency tree (sets all implied symbols).
+          make BR2_EXTERNAL="${BR2_EXT}" olddefconfig
+
+          echo "=== Active Buildroot config (init + toolchain + docker + kernel) ==="
+          grep -E "^BR2_(INIT|TOOLCHAIN_BUILDROOT_(WCHAR|TLS|MUSL|CXX)|PACKAGE_DOCKER|PACKAGE_SYSTEMD|LINUX_KERNEL_LATEST)" .config | sort
+
+          # Verify systemd won
+          if grep -q "^BR2_INIT_BUSYBOX=y" .config; then
+            echo "ERROR: BR2_INIT_BUSYBOX=y still set — systemd failed to apply"
+            exit 1
+          fi
+          if grep -q "^BR2_INIT_SYSTEMD=y" .config; then
+            echo "OK: BR2_INIT_SYSTEMD=y confirmed"
+          else
+            echo "ERROR: BR2_INIT_SYSTEMD=y not in .config"
+            exit 1
+          fi
+
+          # Verify no legacy symbols remain that will stop make all
+          echo "=== Checking Makefile.legacy triggers ==="
+          if [ -f Makefile.legacy ]; then
+            grep -oE 'ifneq \(\$\(BR2_[A-Z0-9_]+\)' Makefile.legacy               | grep -oE 'BR2_[A-Z0-9_]+' | sort -u > /tmp/legacy_syms.txt
+            HITS=0
+            while IFS= read -r sym; do
+              if grep -q "^${sym}=y" .config 2>/dev/null; then
+                echo "  LEGACY HIT: ${sym}"
+                HITS=$((HITS+1))
+              fi
+            done < /tmp/legacy_syms.txt
+            echo "Total legacy hits: ${HITS}"
+          fi
 
       # ── Build! ─────────────────────────────────────────────────────────────
       - name: Run Buildroot make
@@ -303,10 +380,7 @@ jobs:
           cd "${BUILDROOT_DIR}"
 
           export CCACHE_DIR="${GITHUB_WORKSPACE}/buildroot-ccache"
-          # BR2_SKIP_LEGACY=y downgrades the Makefile.legacy fatal error to a
-          # warning, protecting against future Buildroot renames while we iterate.
-          # Remove once the build is fully stable.
-          make BR2_EXTERNAL="${BR2_EXT}" BR2_SKIP_LEGACY=y all 2>&1 | tee /tmp/buildroot-build.log
+          make BR2_EXTERNAL="${BR2_EXT}" all 2>&1 | tee /tmp/buildroot-build.log
 
           echo "Build output:"
           ls -lh output/images/

@@ -3,29 +3,19 @@
 #
 # Buildroot 2024.02.x — SAN Management Platform OVA
 #
-# Target:  x86_64 (BIOS + UEFI via GRUB2)
-# libc:    musl
-# Init:    systemd  (required by Docker Engine)
-# Kernel:  Linux 6.6 LTS
-#
-# Symbol sources:
-#   - Validated against Buildroot 2024.02.9 Kconfig + Makefile.legacy
-#   - BR2_PACKAGE_CURL requires BR2_PACKAGE_LIBCURL as parent (2024.02)
-#   - BR2_INIT_SYSTEMD requires wchar + threads (set explicitly for musl)
-#   - BR2_LINUX_KERNEL_LATEST_LTS_VERSION renamed to
-#     BR2_LINUX_KERNEL_LATEST_VERSION in 2023.x
+# IMPORTANT: This defconfig sets only "stable" symbols whose dependencies
+# are always satisfied. Symbols that require dependency ordering (systemd,
+# wchar, TLS, libcurl) are injected by the CI workflow's Configure step
+# via direct .config patching + olddefconfig propagation.
 # =============================================================================
 
 # ── Architecture ──────────────────────────────────────────────────────────────
 BR2_x86_64=y
 BR2_TARGET_OPTIMIZATION="-O2 -pipe -march=x86-64-v2"
 
-# ── Toolchain ─────────────────────────────────────────────────────────────────
+# ── Toolchain (base — wchar+TLS injected by CI after defconfig load) ──────────
 BR2_TOOLCHAIN_BUILDROOT_MUSL=y
 BR2_TOOLCHAIN_BUILDROOT_CXX=y
-# wchar + threads are required by systemd (even with musl)
-BR2_TOOLCHAIN_BUILDROOT_WCHAR=y
-BR2_TOOLCHAIN_BUILDROOT_TLS=y
 BR2_GCC_VERSION_13_X=y
 BR2_BINUTILS_VERSION_2_41_X=y
 
@@ -36,22 +26,17 @@ BR2_TARGET_GENERIC_ISSUE="SAN Management Platform"
 BR2_TARGET_TZ_INFO=y
 BR2_TARGET_LOCALTIME="UTC"
 
-# ── Init system — systemd (required by Docker Engine) ─────────────────────────
-BR2_INIT_SYSTEMD=y
-BR2_PACKAGE_SYSTEMD=y
-BR2_PACKAGE_SYSTEMD_NETWORKD=y
-BR2_PACKAGE_SYSTEMD_RESOLVED=y
+# ── Init: systemd injected by CI — do not set BR2_INIT_* here ────────────────
 
 # ── Kernel ────────────────────────────────────────────────────────────────────
 BR2_LINUX_KERNEL=y
-# Renamed from BR2_LINUX_KERNEL_LATEST_LTS_VERSION in Buildroot 2023.x
 BR2_LINUX_KERNEL_LATEST_VERSION=y
 BR2_LINUX_KERNEL_USE_DEFCONFIG=y
 BR2_LINUX_KERNEL_DEFCONFIG="x86_64"
 BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_SAN_PLATFORM_PATH)/board/san-platform/linux-docker.fragment"
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
 
-# ── Bootloader (GRUB2 — BIOS + UEFI) ─────────────────────────────────────────
+# ── Bootloader ────────────────────────────────────────────────────────────────
 BR2_TARGET_GRUB2=y
 BR2_TARGET_GRUB2_I386_PC=y
 BR2_TARGET_GRUB2_X86_EFI=y
@@ -73,12 +58,12 @@ BR2_PACKAGE_HOST_PARTED=y
 # ── Core utilities ────────────────────────────────────────────────────────────
 BR2_PACKAGE_BUSYBOX=y
 BR2_PACKAGE_BASH=y
-# curl (cli tool) requires libcurl as parent package in Buildroot 2024.02
-BR2_PACKAGE_LIBCURL=y
-BR2_PACKAGE_CURL=y
 BR2_PACKAGE_CA_CERTIFICATES=y
 BR2_PACKAGE_OPENSSL=y
 BR2_PACKAGE_OPENSSH=y
+
+# ── libcurl + curl CLI (libcurl injected by CI) ───────────────────────────────
+BR2_PACKAGE_CURL=y
 
 # ── Filesystem & disk tools ───────────────────────────────────────────────────
 BR2_PACKAGE_E2FSPROGS=y
@@ -107,5 +92,5 @@ BR2_PACKAGE_LESS=y
 BR2_PACKAGE_VIM_TINY=y
 BR2_PACKAGE_JQ=y
 
-# ── Build cache (CCACHE_DIR set via env var in CI) ────────────────────────────
+# ── Build cache ───────────────────────────────────────────────────────────────
 BR2_CCACHE=y
