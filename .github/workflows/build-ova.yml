@@ -291,23 +291,40 @@ jobs:
             mkdir -p dl
           fi
 
-          # Step 1: Load base defconfig via BR2_EXTERNAL
-          make BR2_EXTERNAL="${BR2_EXT}" san_platform_defconfig
+          # Step 1: Load base defconfig via BR2_EXTERNAL.
+          # If this step fails, the .config is printed in full so we can see
+          # exactly which legacy symbol triggered BR2_LEGACY=y.
+          make BR2_EXTERNAL="${BR2_EXT}" san_platform_defconfig || {
+            echo "=== DEFCONFIG FAILED — full .config dump ==="
+            cat .config 2>/dev/null || echo "(no .config generated)"
+            exit 1
+          }
 
-          # Step 2: Patch .config to force systemd + wchar + TLS + libcurl.
-          # These symbols have Kconfig dependency-ordering constraints that
-          # prevent them from being reliably set via defconfig alone.
+          echo "=== Post-defconfig legacy check ==="
+          grep "BR2_LEGACY" .config && {
+            echo "FATAL: BR2_LEGACY triggered by defconfig symbol"
+            echo "=== Full .config ==="
+            cat .config
+            exit 1
+          } || echo "  OK: no BR2_LEGACY after defconfig"
+
+          # Step 2: Patch .config to force symbols with dependency-ordering
+          # issues (systemd, wchar, TLS, libcurl, GRUB2 string guards).
           python3 "${GITHUB_WORKSPACE}/scripts/patch-buildroot-config.py" .config
 
           # Step 3: Propagate forced values through the full Kconfig tree.
-          # olddefconfig accepts defaults for all unset symbols without prompting.
           make BR2_EXTERNAL="${BR2_EXT}" olddefconfig
 
-          echo "=== Legacy trigger check (must be empty) ==="
-          grep "BR2_LEGACY" .config || echo "  OK: no BR2_LEGACY found"
+          echo "=== Post-olddefconfig legacy check ==="
+          grep "BR2_LEGACY" .config && {
+            echo "FATAL: BR2_LEGACY triggered after olddefconfig"
+            echo "=== Full .config ==="
+            cat .config
+            exit 1
+          } || echo "  OK: no BR2_LEGACY after olddefconfig"
 
           echo "=== Active config snapshot ==="
-          grep -E "^BR2_(INIT|TOOLCHAIN_BUILDROOT_(WCHAR|TLS|MUSL|CXX)|PACKAGE_(DOCKER|SYSTEMD)|LINUX_KERNEL_LATEST)" .config | sort
+          grep -E "^BR2_(INIT|TOOLCHAIN_BUILDROOT_(WCHAR|TLS|MUSL|CXX)|PACKAGE_(DOCKER|SYSTEMD)|LINUX_KERNEL)" .config | sort
 
             # ── Build! ─────────────────────────────────────────────────────────────
       - name: Run Buildroot make

@@ -3,17 +3,19 @@
 #
 # Buildroot 2024.02.x — SAN Management Platform OVA
 #
-# IMPORTANT: This defconfig sets only "stable" symbols whose dependencies
-# are always satisfied. Symbols that require dependency ordering (systemd,
-# wchar, TLS, libcurl) are injected by the CI workflow's Configure step
-# via direct .config patching + olddefconfig propagation.
+# All symbols validated against Buildroot 2024.02.9 Config.in trees.
+# Moving-target symbols (LATEST_VERSION, LATEST_LTS_*) are avoided entirely
+# — an explicit kernel version is pinned instead for build reproducibility.
+#
+# Symbols that require dependency ordering (systemd, wchar, TLS, libcurl)
+# are injected by scripts/patch-buildroot-config.py after defconfig load.
 # =============================================================================
 
 # ── Architecture ──────────────────────────────────────────────────────────────
 BR2_x86_64=y
 BR2_TARGET_OPTIMIZATION="-O2 -pipe -march=x86-64-v2"
 
-# ── Toolchain (base — wchar+TLS injected by CI after defconfig load) ──────────
+# ── Toolchain (base — wchar+TLS injected by patch script) ─────────────────────
 BR2_TOOLCHAIN_BUILDROOT_MUSL=y
 BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_GCC_VERSION_13_X=y
@@ -26,17 +28,20 @@ BR2_TARGET_GENERIC_ISSUE="SAN Management Platform"
 BR2_TARGET_TZ_INFO=y
 BR2_TARGET_LOCALTIME="UTC"
 
-# ── Init: systemd injected by CI — do not set BR2_INIT_* here ────────────────
+# ── Init: systemd injected by patch script after defconfig load ───────────────
 
-# ── Kernel ────────────────────────────────────────────────────────────────────
+# ── Kernel — explicit version (no moving-target LATEST_* symbols) ─────────────
+# 6.6.63 is the version Buildroot 2024.02.9 pins as its LTS kernel.
 BR2_LINUX_KERNEL=y
-BR2_LINUX_KERNEL_LATEST_LTS_6_6=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.6.63"
 BR2_LINUX_KERNEL_USE_DEFCONFIG=y
 BR2_LINUX_KERNEL_DEFCONFIG="x86_64"
 BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_SAN_PLATFORM_PATH)/board/san-platform/linux-docker.fragment"
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
 
-# ── Bootloader ────────────────────────────────────────────────────────────────
+# ── Bootloader — BIOS (i386-pc) + UEFI (x86_64-efi) ─────────────────────────
+# BR2_TARGET_GRUB2_X86_64_EFI is the correct symbol (not X86_EFI)
 BR2_TARGET_GRUB2=y
 BR2_TARGET_GRUB2_I386_PC=y
 BR2_TARGET_GRUB2_X86_64_EFI=y
@@ -61,8 +66,6 @@ BR2_PACKAGE_BASH=y
 BR2_PACKAGE_CA_CERTIFICATES=y
 BR2_PACKAGE_OPENSSL=y
 BR2_PACKAGE_OPENSSH=y
-
-# ── libcurl + curl CLI (libcurl injected by CI) ───────────────────────────────
 BR2_PACKAGE_CURL=y
 
 # ── Filesystem & disk tools ───────────────────────────────────────────────────
