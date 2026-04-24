@@ -215,7 +215,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             qemu-utils \
-            ovftool \
             bc \
             cpio \
             rsync \
@@ -225,9 +224,10 @@ jobs:
             e2fsprogs \
             parted \
             kpartx
-          # ovftool may not be available on ubuntu-latest; use vmware's installer
-          # or fall back to manual OVF bundling (handled in pack-ova.sh)
-          which ovftool 2>/dev/null || echo "ovftool not found — will use manual OVF packing"
+          # ovftool is VMware-proprietary and not available in Ubuntu apt repos.
+          # pack-ova.sh detects its absence and assembles the OVA manually
+          # (qemu-img convert → VMDK, then tar the OVF + VMDK + manifest).
+          echo "ovftool not available — pack-ova.sh will use manual OVF bundling."
 
       # ── Buildroot source cache ─────────────────────────────────────────────
       - name: Cache Buildroot download directory
@@ -431,3 +431,4 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
           files: |
             ${{ env.OVA_FILE }}
+
