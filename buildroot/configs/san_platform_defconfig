@@ -101,15 +101,18 @@ BR2_PACKAGE_JQ=y
 # ── Build cache ───────────────────────────────────────────────────────────────
 BR2_CCACHE=y
 
-# ── GRUB2 EFI — modules baked into bootx64.efi ────────────────────────────────
-# These modules are compiled INTO bootx64.efi so the EFI partition needs no
-# separate grub/x86_64-efi/ directory. Covers everything needed to:
 #   - parse GPT partition table       (part_gpt)
 #   - read ext4 root filesystem       (ext2)
 #   - load linux kernel via EFI       (linuxefi)
 #   - provide interactive GRUB shell  (normal, ls, cat, echo)
 #   - support video/gfx terminal      (all_video, gfxterm, font)
 #   - search for disks by UUID/label  (search, search_fs_uuid, search_label)
-BR2_TARGET_GRUB2_BUILTIN_MODULES="boot linux part_gpt part_msdos fat ext2 normal echo configfile search search_fs_uuid search_fs_file search_label ls cat reboot halt gfxterm font video all_video"
-# Embed our grub.cfg into bootx64.efi as the initial config
-BR2_TARGET_GRUB2_BUILTIN_CONFIG="$(BR2_EXTERNAL_SAN_PLATFORM_PATH)/board/san-platform/grub/grub.cfg"
+
+# ── GRUB2 EFI builtin modules and config ──────────────────────────────────────
+# Use _EFI-suffixed symbols (correct for Buildroot 2024.02 split).
+# The unsuffixed BR2_TARGET_GRUB2_BUILTIN_MODULES/CONFIG are legacy.
+# Note: 'linux' and 'linuxefi' are NOT listed here — in GRUB2 2.12 EFI
+# builds the linux loader is compiled in unconditionally; listing it as
+# a module causes grub-mkimage to fail looking for linux.mod.
+BR2_TARGET_GRUB2_BUILTIN_MODULES_EFI="boot part_gpt part_msdos fat ext2 normal echo configfile search search_fs_uuid search_fs_file search_label ls cat reboot halt gfxterm font video all_video"
+BR2_TARGET_GRUB2_BUILTIN_CONFIG_EFI="$(BR2_EXTERNAL_SAN_PLATFORM_PATH)/board/san-platform/grub/grub.cfg"

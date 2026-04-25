@@ -53,8 +53,11 @@ patches = {
     # ── GRUB2 legacy string traps ─────────────────────────────────────────────
     # These unsplit string symbols trigger BR2_LEGACY if non-empty.
     # They were split into _PC and _EFI variants; force them empty.
-    # BR2_TARGET_GRUB2_BUILTIN_MODULES is set correctly in defconfig — do not touch
-    # BR2_TARGET_GRUB2_BUILTIN_CONFIG is set correctly in defconfig — do not touch
+    # ── GRUB2 legacy traps ───────────────────────────────────────────────────────
+    # The unsuffixed symbols are in Config.in.legacy and trigger BR2_LEGACY=y.
+    # Disable them explicitly; the correct _EFI-suffixed versions are in defconfig.
+    "BR2_TARGET_GRUB2_BUILTIN_MODULES": None,
+    "BR2_TARGET_GRUB2_BUILTIN_CONFIG":  None,
 
     # ── Kernel: remove any moving-target symbols if they leaked in ────────────
     "BR2_LINUX_KERNEL_LATEST_VERSION":  None,
@@ -106,6 +109,7 @@ required_absent = [
     "BR2_TARGET_GRUB2_I386_PC=y",           # selects HAS_LEGACY_BOOT → BR2_LEGACY
     "BR2_TARGET_GRUB2_HAS_LEGACY_BOOT=y",   # the actual legacy trigger
     "BR2_PACKAGE_CURL=y",                    # legacy curl name → BR2_LEGACY
+    "BR2_TARGET_GRUB2_BUILTIN_MODULES=y",   # legacy unsplit → BR2_LEGACY
     "BR2_LINUX_KERNEL_LATEST_VERSION=y",
     "BR2_LINUX_KERNEL_LATEST_LTS_6_6=y",
     "BR2_LEGACY=y",
