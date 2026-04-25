@@ -3,25 +3,10 @@
 # scripts/pack-ova.sh
 #
 # Converts a raw disk image produced by Buildroot/genimage into a
-# standards-compliant OVA (Open Virtualization Appliance).
+# standards-compliant OVA importable by VMware Workstation, Fusion, and ESXi.
 #
 # Usage:
 #   pack-ova.sh <raw-disk.img> <output.ova> <version> <disk-size-mb>
-#
-# The script tries to use `ovftool` (VMware) if available.
-# If not, it manually assembles the OVA from OVF + VMDK + MF manifest.
-#
-# OVA structure:
-#   san-platform.ovf       — VM descriptor (hardware spec, network, disks)
-#   san-platform-disk.vmdk — Sparse VMDK converted from the raw image
-#   san-platform.mf        — SHA256 manifest
-#
-# Hardware specification in the OVF:
-#   vCPUs:  2
-#   RAM:    2 GiB
-#   NIC:    VMXNET3 (VMware paravirtual; most compatible)
-#   SCSI:   LSI Logic Parallel
-#   Disk:   <disk-size-mb> GiB dynamic
 # =============================================================================
 set -euo pipefail
 
@@ -33,8 +18,8 @@ DISK_MB="${4:-8192}"
 TMPDIR_OVA=$(mktemp -d /tmp/ova-XXXXXX)
 trap 'rm -rf "${TMPDIR_OVA}"' EXIT
 
-log()  { echo "[pack-ova] $*"; }
-die()  { echo "[pack-ova] ERROR: $*" >&2; exit 1; }
+log() { echo "[pack-ova] $*"; }
+die() { echo "[pack-ova] ERROR: $*" >&2; exit 1; }
 
 [ -f "${RAW_IMG}" ] || die "Raw image not found: ${RAW_IMG}"
 
@@ -46,7 +31,7 @@ MF="${TMPDIR_OVA}/${NAME}.mf"
 DISK_BYTES=$(( DISK_MB * 1024 * 1024 ))
 
 # ── Step 1: Convert raw → sparse VMDK ────────────────────────────────────────
-log "Converting raw image → sparse VMDK…"
+log "Converting raw image → monolithicSparse VMDK…"
 qemu-img convert \
     -f raw \
     -O vmdk \
@@ -55,32 +40,20 @@ qemu-img convert \
     "${VMDK}"
 
 VMDK_SIZE=$(stat -c '%s' "${VMDK}")
-log "VMDK size: $(numfmt --to=iec ${VMDK_SIZE})"
-
-# ── Step 2: Try ovftool first ────────────────────────────────────────────────
-if command -v ovftool &>/dev/null; then
-    log "ovftool found — using it to assemble OVA"
-    ovftool \
-        --name="${NAME}-${VERSION}" \
-        --diskMode=streamOptimized \
-        "${VMDK}" \
-        "${OUTPUT_OVA}"
-    log "OVA created by ovftool: ${OUTPUT_OVA}"
-    exit 0
-fi
-
-log "ovftool not available — assembling OVA manually"
-
-# ── Step 3: Generate OVF descriptor ──────────────────────────────────────────
 VMDK_BASENAME=$(basename "${VMDK}")
-DISK_CAPACITY_BYTES="${DISK_BYTES}"
+log "VMDK size: $(numfmt --to=iec "${VMDK_SIZE}")"
 
-cat > "${OVF}" << OVF_EOF
+# ── Step 2: Generate OVF descriptor ──────────────────────────────────────────
+# Uses ovf: namespace prefixes on System and Item elements — required by
+# VMware Workstation's strict OVF 1.1 parser.
+log "Generating OVF descriptor…"
+
+cat > "${OVF}" << OVFEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <Envelope xmlns="http://schemas.dmtf.org/ovf/envelope/1"
+          xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1"
           xmlns:rasd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"
           xmlns:vssd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData"
-          xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1"
           xmlns:vmw="http://www.vmware.com/schema/ovf"
           xml:lang="en-US">
 
@@ -92,7 +65,7 @@ cat > "${OVF}" << OVF_EOF
     <Info>Virtual disk information</Info>
     <Disk ovf:diskId="vmdisk1"
           ovf:fileRef="disk1"
-          ovf:capacity="${DISK_CAPACITY_BYTES}"
+          ovf:capacity="${DISK_BYTES}"
           ovf:capacityAllocationUnits="byte"
           ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#sparse"
           ovf:populatedSize="${VMDK_SIZE}"/>
@@ -107,14 +80,13 @@ cat > "${OVF}" << OVF_EOF
 
   <VirtualSystem ovf:id="${NAME}">
     <Info>SAN Management Platform Appliance v${VERSION}</Info>
-    <Name>${NAME}-${VERSION}</Name>
 
     <AnnotationSection>
       <Info>Appliance annotations</Info>
-      <Annotation>SAN Management Platform v${VERSION}. Default web UI: http://&lt;vm-ip&gt;:8080. Default login: admin / Admin1234!</Annotation>
+      <Annotation>SAN Platform v${VERSION} — Web UI: http://vm-ip:8080 — Login: admin/Admin1234!</Annotation>
     </AnnotationSection>
 
-    <OperatingSystemSection ovf:id="100" vmw:osType="otherLinux64Guest">
+    <OperatingSystemSection ovf:id="101" vmw:osType="otherLinux64Guest">
       <Info>Guest operating system</Info>
       <Description>Linux (Buildroot, musl, kernel 6.6 LTS)</Description>
     </OperatingSystemSection>
@@ -122,110 +94,88 @@ cat > "${OVF}" << OVF_EOF
     <VirtualHardwareSection>
       <Info>Virtual hardware requirements</Info>
 
-      <System>
+      <ovf:System>
         <vssd:ElementName>Virtual Hardware Family</vssd:ElementName>
         <vssd:InstanceID>0</vssd:InstanceID>
         <vssd:VirtualSystemIdentifier>${NAME}</vssd:VirtualSystemIdentifier>
         <vssd:VirtualSystemType>vmx-19</vssd:VirtualSystemType>
-      </System>
-
-      <!-- EFI firmware — required for GPT/EFI-only boot disk -->
-      <vmw:Config ovf:required="false" vmw:key="firmware" vmw:value="efi"/>
-      <!-- Disable secure boot so unsigned Buildroot kernels load -->
-      <vmw:Config ovf:required="false" vmw:key="uefi.secureBoot.enabled" vmw:value="false"/>
+      </ovf:System>
 
       <!-- 2 vCPUs -->
-      <Item>
+      <ovf:Item>
         <rasd:Description>Number of virtual CPUs</rasd:Description>
         <rasd:ElementName>2 virtual CPU(s)</rasd:ElementName>
         <rasd:InstanceID>1</rasd:InstanceID>
         <rasd:ResourceType>3</rasd:ResourceType>
         <rasd:VirtualQuantity>2</rasd:VirtualQuantity>
-      </Item>
+      </ovf:Item>
 
       <!-- 2 GiB RAM -->
-      <Item>
+      <ovf:Item>
         <rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>
         <rasd:Description>Memory Size</rasd:Description>
         <rasd:ElementName>2048 MB of memory</rasd:ElementName>
         <rasd:InstanceID>2</rasd:InstanceID>
         <rasd:ResourceType>4</rasd:ResourceType>
         <rasd:VirtualQuantity>2048</rasd:VirtualQuantity>
-      </Item>
+      </ovf:Item>
 
-      <!-- LSI Logic SCSI controller -->
-      <Item>
+      <!-- LSI Logic Parallel SCSI controller -->
+      <ovf:Item>
         <rasd:Description>SCSI Controller</rasd:Description>
         <rasd:ElementName>SCSI controller 0</rasd:ElementName>
         <rasd:InstanceID>3</rasd:InstanceID>
         <rasd:ResourceSubType>lsilogic</rasd:ResourceSubType>
         <rasd:ResourceType>6</rasd:ResourceType>
-      </Item>
+      </ovf:Item>
 
-      <!-- Disk on SCSI controller -->
-      <Item>
+      <!-- Disk attached to SCSI controller -->
+      <ovf:Item>
         <rasd:AddressOnParent>0</rasd:AddressOnParent>
         <rasd:ElementName>Hard disk 1</rasd:ElementName>
         <rasd:HostResource>ovf:/disk/vmdisk1</rasd:HostResource>
         <rasd:InstanceID>4</rasd:InstanceID>
         <rasd:Parent>3</rasd:Parent>
         <rasd:ResourceType>17</rasd:ResourceType>
-      </Item>
+      </ovf:Item>
 
       <!-- VMXNET3 NIC -->
-      <Item>
+      <ovf:Item>
         <rasd:AddressOnParent>0</rasd:AddressOnParent>
         <rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>
         <rasd:Connection>Management</rasd:Connection>
-        <rasd:Description>VMXNET3 adapter</rasd:Description>
+        <rasd:Description>VMXNET3 ethernet adapter</rasd:Description>
         <rasd:ElementName>Network adapter 1</rasd:ElementName>
         <rasd:InstanceID>5</rasd:InstanceID>
         <rasd:ResourceSubType>VMXNET3</rasd:ResourceSubType>
         <rasd:ResourceType>10</rasd:ResourceType>
-      </Item>
+      </ovf:Item>
 
-      <!-- USB controller -->
-      <Item ovf:required="false">
-        <rasd:ElementName>USB controller</rasd:ElementName>
-        <rasd:InstanceID>6</rasd:InstanceID>
-        <rasd:ResourceSubType>vmware.usb.xhci</rasd:ResourceSubType>
-        <rasd:ResourceType>23</rasd:ResourceType>
-      </Item>
+      <!-- vmw:Config elements must come after all ovf:Item elements -->
+      <!-- EFI firmware type — required for GPT/EFI-only boot disk -->
+      <vmw:Config ovf:required="false" vmw:key="firmware" vmw:value="efi"/>
+      <!-- Disable secure boot so unsigned Buildroot kernel loads -->
+      <vmw:Config ovf:required="false" vmw:key="uefi.secureBoot.enabled" vmw:value="false"/>
 
     </VirtualHardwareSection>
 
-    <!-- Properties the operator can set in vSphere/OVF deploy wizard -->
     <ProductSection>
-      <Info>Product customization for the deployed software</Info>
+      <Info>Product customization</Info>
       <Product>SAN Management Platform</Product>
       <Vendor>Your Organization</Vendor>
       <Version>${VERSION}</Version>
       <FullVersion>${VERSION}</FullVersion>
-
-      <Property ovf:key="admin_password" ovf:type="string" ovf:userConfigurable="true"
-                ovf:value="Admin1234!">
-        <Label>Admin Password</Label>
-        <Description>Initial password for the admin web UI account. Change after first login.</Description>
-      </Property>
-
-      <Property ovf:key="mds_password" ovf:type="string" ovf:userConfigurable="true"
-                ovf:value="CHANGE_ME">
-        <Label>MDS Switch Password</Label>
-        <Description>Password for the MDS switch admin account.</Description>
-      </Property>
-
     </ProductSection>
 
   </VirtualSystem>
 </Envelope>
-OVF_EOF
+OVFEOF
 
-log "OVF descriptor generated"
+log "OVF descriptor generated ($(wc -l < "${OVF}") lines)"
 
-# ── Step 4: Generate SHA256 manifest ─────────────────────────────────────────
-# Compute hashes AFTER all files are fully written.
-# Use printf (not echo/heredoc) to guarantee no trailing newlines or spaces —
-# VMware's OVF parser is strict: each line must be exactly SHA256(file)= <hex>
+# ── Step 3: Generate SHA256 manifest ─────────────────────────────────────────
+# Use printf to guarantee no trailing whitespace — VMware's parser is strict.
+log "Generating manifest…"
 OVF_SHA=$(sha256sum "${OVF}"  | awk '{print $1}')
 MDF_SHA=$(sha256sum "${VMDK}" | awk '{print $1}')
 
@@ -234,13 +184,15 @@ MDF_SHA=$(sha256sum "${VMDK}" | awk '{print $1}')
     printf 'SHA256(%s)= %s\n' "${VMDK_BASENAME}" "${MDF_SHA}"
 } > "${MF}"
 
-log "Manifest contents:"
-cat "${MF}" 
+log "Manifest:"
+cat "${MF}"
 
-log "Manifest generated"
-
-# ── Step 5: Bundle as OVA (tar, no compression — OVF spec requirement) ────────
-log "Bundling OVA archive…"
+# ── Step 4: Bundle as OVA ─────────────────────────────────────────────────────
+# OVA = uncompressed tar. OVF spec requires this exact member order:
+#   1. OVF descriptor  (.ovf)
+#   2. disk image(s)   (.vmdk)
+#   3. manifest        (.mf)
+log "Bundling OVA (tar, uncompressed — OVF 1.1 spec)…"
 tar -cf "${OUTPUT_OVA}" \
     -C "${TMPDIR_OVA}" \
     "${NAME}.ovf" \

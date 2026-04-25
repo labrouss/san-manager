@@ -53,8 +53,8 @@ patches = {
     # ── GRUB2 legacy string traps ─────────────────────────────────────────────
     # These unsplit string symbols trigger BR2_LEGACY if non-empty.
     # They were split into _PC and _EFI variants; force them empty.
-    "BR2_TARGET_GRUB2_BUILTIN_MODULES": None,   # legacy unsplit symbol — disable
-    "BR2_TARGET_GRUB2_BUILTIN_CONFIG":  None,   # legacy unsplit symbol — disable
+    # BR2_TARGET_GRUB2_BUILTIN_MODULES is set correctly in defconfig — do not touch
+    # BR2_TARGET_GRUB2_BUILTIN_CONFIG is set correctly in defconfig — do not touch
 
     # ── Kernel: remove any moving-target symbols if they leaked in ────────────
     "BR2_LINUX_KERNEL_LATEST_VERSION":  None,

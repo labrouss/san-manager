@@ -110,6 +110,6 @@ BR2_CCACHE=y
 #   - provide interactive GRUB shell  (normal, ls, cat, echo)
 #   - support video/gfx terminal      (all_video, gfxterm, font)
 #   - search for disks by UUID/label  (search, search_fs_uuid, search_label)
-BR2_TARGET_GRUB2_BUILTIN_MODULES_EFI="part_gpt part_msdos fat ext2 normal boot echo configfile search search_fs_uuid search_fs_file search_label ls cat reboot halt gfxterm font video all_video"
+BR2_TARGET_GRUB2_BUILTIN_MODULES="boot linux part_gpt part_msdos fat ext2 normal echo configfile search search_fs_uuid search_fs_file search_label ls cat reboot halt gfxterm font video all_video"
 # Embed our grub.cfg into bootx64.efi as the initial config
-BR2_TARGET_GRUB2_BUILTIN_CONFIG_EFI="$(BR2_EXTERNAL_SAN_PLATFORM_PATH)/board/san-platform/grub/grub.cfg"
+BR2_TARGET_GRUB2_BUILTIN_CONFIG="$(BR2_EXTERNAL_SAN_PLATFORM_PATH)/board/san-platform/grub/grub.cfg"
