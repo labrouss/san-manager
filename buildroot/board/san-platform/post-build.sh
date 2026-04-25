@@ -1,22 +1,9 @@
 #!/bin/bash
 # =============================================================================
 # buildroot/board/san-platform/post-build.sh
-#
-# Runs inside the Buildroot build environment *after* the root filesystem
-# is assembled but *before* it is packed into an image.
-#
-# This script:
-#   1. Enables the san-platform systemd services
-#   2. Creates required runtime directories (with correct permissions)
-#   3. Copies the docker-compose.yml and db init scripts into the overlay
-#   4. Sets up SSH host-key generation on first boot
-#   5. Configures Docker daemon settings
 # =============================================================================
 set -euo pipefail
 
-# Buildroot exports TARGET_DIR, HOST_DIR, STAGING_DIR, BINARIES_DIR as
-# environment variables when calling post-build scripts. Do not use $1/$2.
-# Fail fast if the variable isn't set (means script was called incorrectly).
 : "${TARGET_DIR:?TARGET_DIR is not set — must be called by Buildroot make}"
 
 log() { echo "[post-build] $*"; }
@@ -34,12 +21,11 @@ for svc in san-platform-load san-platform; do
 done
 
 # ── 2. Runtime data directories ───────────────────────────────────────────────
-# These are bind-mounted into Docker as named volumes.
-# Created here so they exist on first boot; systemd-tmpfiles keeps them.
 mkdir -p "${TARGET_DIR}/var/lib/san-platform/pg_data"
 mkdir -p "${TARGET_DIR}/var/lib/san-platform/logs"
 
-# tmpfiles.d entry for the data dir (recreated if accidentally deleted)
+# tmpfiles.d — mkdir -p required; directory may not exist in minimal rootfs
+mkdir -p "${TARGET_DIR}/etc/tmpfiles.d"
 cat > "${TARGET_DIR}/etc/tmpfiles.d/san-platform.conf" << 'TMPFILES'
 d /var/lib/san-platform        0700 root root -
 d /var/lib/san-platform/pg_data 0700 root root -
@@ -52,12 +38,10 @@ SECRETS_DIR="${TARGET_DIR}/opt/san-platform/secrets"
 mkdir -p "${SECRETS_DIR}"
 chmod 700 "${SECRETS_DIR}"
 
-# Placeholder secrets — operator MUST change these after first boot!
-echo "san_secret"  > "${SECRETS_DIR}/db_password.txt"
-echo "CHANGE_ME"   > "${SECRETS_DIR}/mds_password.txt"
+echo "san_secret" > "${SECRETS_DIR}/db_password.txt"
+echo "CHANGE_ME"  > "${SECRETS_DIR}/mds_password.txt"
 chmod 600 "${SECRETS_DIR}/db_password.txt"
 chmod 600 "${SECRETS_DIR}/mds_password.txt"
-
 log "Placeholder secrets written (operator must update these!)"
 
 # ── 4. Make all helper scripts executable ─────────────────────────────────────
@@ -83,9 +67,9 @@ cat > "${TARGET_DIR}/etc/docker/daemon.json" << 'DOCKERD'
 DOCKERD
 log "Docker daemon.json written"
 
-# ── 6. SSH host-key generation on first boot (via systemd-firstboot) ──────────
-# Buildroot includes openssh — generate keys if absent
+# ── 6. SSH host-key generation on first boot ──────────────────────────────────
 if [ -d "${TARGET_DIR}/etc/ssh" ]; then
+    mkdir -p "${TARGET_DIR}/etc/systemd/system"
     cat > "${TARGET_DIR}/etc/systemd/system/ssh-keygen-firstboot.service" << 'SSH_SVC'
 [Unit]
 Description=Generate SSH host keys on first boot
