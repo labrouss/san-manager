@@ -242,6 +242,12 @@ jobs:
           echo "ovftool not available — pack-ova.sh will use manual OVF bundling."
 
       # ── Buildroot source cache ─────────────────────────────────────────────
+      # Pre-create directories so actions/cache can save them even on a miss.
+      - name: Prepare cache directories
+        run: |
+          mkdir -p buildroot-dl
+          mkdir -p buildroot-ccache
+
       - name: Cache Buildroot download directory
         uses: actions/cache@v4
         with:
@@ -250,6 +256,7 @@ jobs:
           restore-keys: |
             buildroot-dl-${{ env.BUILDROOT_VERSION }}-
             buildroot-dl-
+          save-always: true
 
       - name: Cache Buildroot ccache
         uses: actions/cache@v4
@@ -258,6 +265,7 @@ jobs:
           key: buildroot-ccache-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/configs/san_platform_defconfig') }}
           restore-keys: |
             buildroot-ccache-${{ env.BUILDROOT_VERSION }}-
+          save-always: true
 
       # ── Fetch Buildroot ────────────────────────────────────────────────────
       - name: Fetch Buildroot ${{ env.BUILDROOT_VERSION }}
@@ -296,12 +304,11 @@ jobs:
         run: |
           cd "${BUILDROOT_DIR}"
 
-          # Link DL cache
-          if [ -d "${GITHUB_WORKSPACE}/buildroot-dl" ]; then
-            ln -sfn "${GITHUB_WORKSPACE}/buildroot-dl" dl
-          else
-            mkdir -p dl
-          fi
+          # Link DL + ccache directories so downloaded sources are cached
+          # between runs. Directories are always pre-created by the
+          # "Prepare cache directories" step above.
+          ln -sfn "${GITHUB_WORKSPACE}/buildroot-dl" dl
+          export CCACHE_DIR="${GITHUB_WORKSPACE}/buildroot-ccache" 
 
           # Step 1: Load base defconfig via BR2_EXTERNAL.
           # If this step fails, the .config is printed in full so we can see

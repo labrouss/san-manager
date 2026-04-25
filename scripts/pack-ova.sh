@@ -50,7 +50,7 @@ log "Converting raw image → sparse VMDK…"
 qemu-img convert \
     -f raw \
     -O vmdk \
-    -o subformat=streamOptimized \
+    -o subformat=monolithicSparse \
     "${RAW_IMG}" \
     "${VMDK}"
 
@@ -94,7 +94,7 @@ cat > "${OVF}" << OVF_EOF
           ovf:fileRef="disk1"
           ovf:capacity="${DISK_CAPACITY_BYTES}"
           ovf:capacityAllocationUnits="byte"
-          ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized"
+          ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#sparse"
           ovf:populatedSize="${VMDK_SIZE}"/>
   </DiskSection>
 
@@ -218,13 +218,19 @@ OVF_EOF
 log "OVF descriptor generated"
 
 # ── Step 4: Generate SHA256 manifest ─────────────────────────────────────────
+# Compute hashes AFTER all files are fully written.
+# Use printf (not echo/heredoc) to guarantee no trailing newlines or spaces —
+# VMware's OVF parser is strict: each line must be exactly SHA256(file)= <hex>
 OVF_SHA=$(sha256sum "${OVF}"  | awk '{print $1}')
 MDF_SHA=$(sha256sum "${VMDK}" | awk '{print $1}')
 
-cat > "${MF}" << MF_EOF
-SHA256(${NAME}.ovf)= ${OVF_SHA}
-SHA256(${VMDK_BASENAME})= ${MDF_SHA}
-MF_EOF
+{
+    printf 'SHA256(%s)= %s\n' "${NAME}.ovf"      "${OVF_SHA}"
+    printf 'SHA256(%s)= %s\n' "${VMDK_BASENAME}" "${MDF_SHA}"
+} > "${MF}"
+
+log "Manifest contents:"
+cat "${MF}" 
 
 log "Manifest generated"
 
