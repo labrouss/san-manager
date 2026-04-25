@@ -129,6 +129,11 @@ cat > "${OVF}" << OVF_EOF
         <vssd:VirtualSystemType>vmx-19</vssd:VirtualSystemType>
       </System>
 
+      <!-- EFI firmware — required for GPT/EFI-only boot disk -->
+      <vmw:Config ovf:required="false" vmw:key="firmware" vmw:value="efi"/>
+      <!-- Disable secure boot so unsigned Buildroot kernels load -->
+      <vmw:Config ovf:required="false" vmw:key="uefi.secureBoot.enabled" vmw:value="false"/>
+
       <!-- 2 vCPUs -->
       <Item>
         <rasd:Description>Number of virtual CPUs</rasd:Description>

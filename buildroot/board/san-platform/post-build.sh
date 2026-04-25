@@ -111,4 +111,17 @@ cat > "${TARGET_DIR}/etc/motd" << 'MOTD'
 
 MOTD
 
+# ── 8. Copy kernel to /boot on rootfs ────────────────────────────────────────
+# GRUB EFI loads the kernel from /boot/bzImage on the root (ext4) partition.
+# Buildroot places bzImage in BINARIES_DIR (output/images/), not in TARGET_DIR.
+# We copy it here so it ends up in the root filesystem image.
+mkdir -p "${TARGET_DIR}/boot"
+if [ -n "${BINARIES_DIR:-}" ] && [ -f "${BINARIES_DIR}/bzImage" ]; then
+    cp "${BINARIES_DIR}/bzImage" "${TARGET_DIR}/boot/bzImage"
+    log "Copied bzImage to /boot"
+else
+    # BINARIES_DIR may not be set during post-build; bzImage copied in post-image
+    log "bzImage not yet available in BINARIES_DIR — will be handled in post-image.sh"
+fi
+
 log "post-build.sh completed successfully"

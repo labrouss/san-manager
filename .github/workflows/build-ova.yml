@@ -231,7 +231,8 @@ jobs:
             bison \
             python3 \
             python3-pip \
-            genext2fs
+            genext2fs \
+            e2tools
           # libelf-dev    → Linux kernel objtool (fatal: gelf.h not found without it)
           # libssl-dev    → BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL
           # libncurses-dev → Buildroot menuconfig support
