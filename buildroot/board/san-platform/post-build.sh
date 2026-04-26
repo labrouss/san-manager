@@ -10,16 +10,18 @@ log() { echo "[post-build] $*"; }
 
 log "TARGET_DIR = ${TARGET_DIR}"
 
-# ── 1. Make init.d scripts executable ────────────────────────────────────────
+# ── 1. Make ALL init.d scripts executable ────────────────────────────────────
+# Git and Buildroot's overlay copy do not reliably preserve execute bits.
+# Explicitly chmod +x every script in the target /etc/init.d/.
 INITD="${TARGET_DIR}/etc/init.d"
-for script in S00mountfs S01firstboot S40docker S50san-platform-load S50sshd S60san-platform; do
-    if [ -f "${INITD}/${script}" ]; then
-        chmod +x "${INITD}/${script}"
-        log "Made executable: ${script}"
-    else
-        log "WARNING: ${INITD}/${script} not found in overlay"
-    fi
-done
+if [ -d "${INITD}" ]; then
+    find "${INITD}" -type f | while read -r script; do
+        chmod +x "${script}"
+        log "Made executable: $(basename "${script}")"
+    done
+else
+    log "WARNING: ${INITD} not found in target"
+fi
 
 # ── 2. Runtime data directories ───────────────────────────────────────────────
 mkdir -p "${TARGET_DIR}/var/lib/san-platform/pg_data"
