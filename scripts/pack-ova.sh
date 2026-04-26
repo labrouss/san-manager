@@ -120,16 +120,16 @@ cat > "${OVF}" << OVFEOF
         <rasd:VirtualQuantity>2048</rasd:VirtualQuantity>
       </ovf:Item>
 
-      <!-- LSI Logic Parallel SCSI controller -->
+      <!-- SATA controller (kernel has AHCI, not SCSI) -->
       <ovf:Item>
-        <rasd:Description>SCSI Controller</rasd:Description>
-        <rasd:ElementName>SCSI controller 0</rasd:ElementName>
+        <rasd:Description>SATA Controller</rasd:Description>
+        <rasd:ElementName>SATA controller 0</rasd:ElementName>
         <rasd:InstanceID>3</rasd:InstanceID>
-        <rasd:ResourceSubType>lsilogic</rasd:ResourceSubType>
-        <rasd:ResourceType>6</rasd:ResourceType>
+        <rasd:ResourceSubType>vmware.sata.ahci</rasd:ResourceSubType>
+        <rasd:ResourceType>20</rasd:ResourceType>
       </ovf:Item>
 
-      <!-- Disk attached to SCSI controller -->
+      <!-- Disk attached to SATA controller -->
       <ovf:Item>
         <rasd:AddressOnParent>0</rasd:AddressOnParent>
         <rasd:ElementName>Hard disk 1</rasd:ElementName>
@@ -173,11 +173,23 @@ OVFEOF
 
 log "OVF descriptor generated ($(wc -l < "${OVF}") lines)"
 
-# ── Step 3: Generate SHA256 manifest ─────────────────────────────────────────
-# Use printf to guarantee no trailing whitespace — VMware's parser is strict.
-log "Generating manifest…"
-OVF_SHA=$(sha256sum "${OVF}"  | awk '{print $1}')
-MDF_SHA=$(sha256sum "${VMDK}" | awk '{print $1}')
+# ── Step 3: Bundle OVF + VMDK first (no manifest yet) ────────────────────────
+# OVA = uncompressed tar. Required member order per OVF 1.1 spec:
+#   1. OVF descriptor  (.ovf)
+#   2. disk image(s)   (.vmdk)
+#   3. manifest        (.mf)  ← appended last after hashing from the tar stream
+log "Bundling OVF + VMDK into OVA…"
+tar -cf "${OUTPUT_OVA}" \
+    -C "${TMPDIR_OVA}" \
+    "${NAME}.ovf" \
+    "${VMDK_BASENAME}"
+
+# ── Step 4: Compute SHA256 by reading back from the tar stream ────────────────
+# Hashing the tar-extracted bytes guarantees the digest matches exactly what
+# VMware reads when it validates the OVA — eliminates file-vs-stream mismatches.
+log "Computing SHA256 from OVA tar members…"
+OVF_SHA=$(tar -xOf "${OUTPUT_OVA}" "${NAME}.ovf"      | sha256sum | awk '{print $1}')
+MDF_SHA=$(tar -xOf "${OUTPUT_OVA}" "${VMDK_BASENAME}" | sha256sum | awk '{print $1}')
 
 {
     printf 'SHA256(%s)= %s\n' "${NAME}.ovf"      "${OVF_SHA}"
@@ -187,16 +199,9 @@ MDF_SHA=$(sha256sum "${VMDK}" | awk '{print $1}')
 log "Manifest:"
 cat "${MF}"
 
-# ── Step 4: Bundle as OVA ─────────────────────────────────────────────────────
-# OVA = uncompressed tar. OVF spec requires this exact member order:
-#   1. OVF descriptor  (.ovf)
-#   2. disk image(s)   (.vmdk)
-#   3. manifest        (.mf)
-log "Bundling OVA (tar, uncompressed — OVF 1.1 spec)…"
-tar -cf "${OUTPUT_OVA}" \
+# ── Step 5: Append manifest as final OVA member ───────────────────────────────
+tar -rf "${OUTPUT_OVA}" \
     -C "${TMPDIR_OVA}" \
-    "${NAME}.ovf" \
-    "${VMDK_BASENAME}" \
     "${NAME}.mf"
 
 log "OVA assembled: ${OUTPUT_OVA}"
