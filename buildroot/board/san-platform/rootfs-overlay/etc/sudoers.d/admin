@@ -1,0 +1,5 @@
+# /etc/sudoers.d/admin
+# Grants the 'admin' user full sudo access without a password prompt.
+# This is acceptable for an appliance where admin is the sole operator account.
+# To require a password: change NOPASSWD to PASSWD
+admin ALL=(ALL) NOPASSWD: ALL

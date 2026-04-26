@@ -1,0 +1,44 @@
+#!/bin/sh
+# /etc/init.d/S50sshd
+#
+# Start/stop the OpenSSH daemon.
+# Runs before S60san-platform so SSH is available during stack startup.
+
+PIDFILE="/var/run/sshd.pid"
+SSHD_CONFIG="/etc/ssh/sshd_config"
+
+# Generate host keys if they don't exist yet (first boot)
+generate_host_keys() {
+    for type in rsa ecdsa ed25519; do
+        keyfile="/etc/ssh/ssh_host_${type}_key"
+        if [ ! -f "${keyfile}" ]; then
+            printf "  Generating SSH %s host key...\n" "${type}"
+            ssh-keygen -q -t "${type}" -N "" -f "${keyfile}"
+        fi
+    done
+}
+
+start() {
+    printf "Starting sshd: "
+    generate_host_keys
+    start-stop-daemon -S -q -m -p "${PIDFILE}" \
+        -x /usr/sbin/sshd -- -f "${SSHD_CONFIG}"
+    [ $? -eq 0 ] && printf "OK\n" || printf "FAIL\n"
+}
+
+stop() {
+    printf "Stopping sshd: "
+    start-stop-daemon -K -q -p "${PIDFILE}"
+    [ $? -eq 0 ] && printf "OK\n" || printf "FAIL\n"
+    rm -f "${PIDFILE}"
+}
+
+case "$1" in
+    start)        start  ;;
+    stop)         stop   ;;
+    restart) stop; start ;;
+    *)
+        printf "Usage: %s {start|stop|restart}\n" "$0"
+        exit 1
+        ;;
+esac

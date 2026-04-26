@@ -85,6 +85,69 @@ cat > "${TARGET_DIR}/etc/motd" << 'MOTD'
 
 MOTD
 
+# ── 7. Create admin user ─────────────────────────────────────────────────────
+# Add 'admin' group and user if not already present in the target rootfs.
+# Password is set to 'Admin1234!' as a placeholder — the setup wizard
+# (setup.sh) will prompt the operator to change it on first login.
+SHADOW="${TARGET_DIR}/etc/shadow"
+PASSWD_FILE="${TARGET_DIR}/etc/passwd"
+GROUP_FILE="${TARGET_DIR}/etc/group"
+
+# Add admin group (GID 1000) if absent
+if ! grep -q "^admin:" "${GROUP_FILE}" 2>/dev/null; then
+    echo "admin:x:1000:" >> "${GROUP_FILE}"
+    log "Created group: admin"
+fi
+
+# Add admin user (UID 1000) if absent
+if ! grep -q "^admin:" "${PASSWD_FILE}" 2>/dev/null; then
+    echo "admin:x:1000:1000:SAN Platform Admin:/home/admin:/bin/sh" >> "${PASSWD_FILE}"
+    log "Created user: admin"
+fi
+
+# Set placeholder password hash (Admin1234!) in shadow
+# Generated with: openssl passwd -6 'Admin1234!'
+ADMIN_HASH='$6$rounds=4096$san.platform$Dc4dHMUl.0ELjRpRqbHOSqiDWm/MwIJw3P7qRBFm4oLMOuBJmSs1TKv4Z2l8k/VJz.WK6mWm4QEFl2MuT9Wr1'
+if ! grep -q "^admin:" "${SHADOW}" 2>/dev/null; then
+    echo "admin:${ADMIN_HASH}:19600:0:99999:7:::" >> "${SHADOW}"
+    chmod 640 "${SHADOW}"
+    log "Set admin password hash in shadow"
+fi
+
+# Create admin home directory
+mkdir -p "${TARGET_DIR}/home/admin/.ssh"
+chmod 700 "${TARGET_DIR}/home/admin"
+chmod 700 "${TARGET_DIR}/home/admin/.ssh"
+
+# Copy root setup wizard to admin home too
+cp "${TARGET_DIR}/root/setup.sh" "${TARGET_DIR}/home/admin/setup.sh" 2>/dev/null || true
+chmod +x "${TARGET_DIR}/home/admin/setup.sh" 2>/dev/null || true
+
+# admin .profile — same auto-wizard behaviour as root
+cat > "${TARGET_DIR}/home/admin/.profile" << 'PROFILE'
+#!/bin/sh
+if [ ! -f /var/lib/san-platform/.setup-done ]; then
+    exec sudo /root/setup.sh
+fi
+IP=$(ip route get 1.1.1.1 2>/dev/null     | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
+printf "
+  SAN Management Platform
+"
+printf "  Web UI  : http://%s:8080
+" "${IP:-<ip>}"
+printf "  Stack   : sudo /etc/init.d/S60san-platform {status|start|stop|restart}
+
+"
+PROFILE
+
+# Fix ownership (uid/gid 1000)
+chown -R 1000:1000 "${TARGET_DIR}/home/admin" 2>/dev/null || true
+
+# Fix sudoers.d permissions — sudo requires 440 on drop-in files
+chmod 440 "${TARGET_DIR}/etc/sudoers.d/admin" 2>/dev/null || true
+
+log "admin user configured"
+
 # ── 7. Root setup wizard ─────────────────────────────────────────────────────
 chmod +x "${TARGET_DIR}/root/setup.sh" 2>/dev/null || true
 log "setup.sh made executable"

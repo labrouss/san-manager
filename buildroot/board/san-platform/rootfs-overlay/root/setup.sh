@@ -171,7 +171,7 @@ read -r _dummy
 # STEP 2 — Root Password
 # =============================================================================
 banner
-section "Step 2 of 5 — Root Password"
+section "Step 2 of 5 — System Passwords"
 
 printf "  Set the root (system administrator) password for SSH/console access.\n\n"
 
