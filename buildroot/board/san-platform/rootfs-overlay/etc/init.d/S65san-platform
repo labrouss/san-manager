@@ -1,0 +1,96 @@
+#!/bin/sh
+# /etc/init.d/S65san-platform — SAN Platform stack manager
+
+COMPOSE_DIR="/opt/san-platform"
+ENV_FILE="${COMPOSE_DIR}/.env"
+LOG_FILE="/var/log/san-platform.log"
+SETUP_STAMP="/var/lib/san-platform/.setup-done"
+
+write_env() {
+    PRIMARY_IP=$(ip route get 1.1.1.1 2>/dev/null \
+        | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' \
+        | head -1)
+    PRIMARY_IP="${PRIMARY_IP:-127.0.0.1}"
+
+    SECRETS_DIR="${COMPOSE_DIR}/secrets"
+    DB_PASSWORD="san_secret"
+    MDS_PASSWORD="CHANGE_ME"
+    ADMIN_PASSWORD="Admin1234!"
+
+    [ -f "${SECRETS_DIR}/db_password.txt" ] && \
+        DB_PASSWORD=$(tr -d '[:space:]' < "${SECRETS_DIR}/db_password.txt")
+    [ -f "${SECRETS_DIR}/mds_password.txt" ] && \
+        MDS_PASSWORD=$(tr -d '[:space:]' < "${SECRETS_DIR}/mds_password.txt")
+    [ -f "${SECRETS_DIR}/admin_password.txt" ] && \
+        ADMIN_PASSWORD=$(tr -d '[:space:]' < "${SECRETS_DIR}/admin_password.txt")
+
+    JWT_SECRET_FILE="${SECRETS_DIR}/jwt_secret.txt"
+    if [ ! -f "${JWT_SECRET_FILE}" ]; then
+        tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 48 > "${JWT_SECRET_FILE}"
+        chmod 600 "${JWT_SECRET_FILE}"
+    fi
+    JWT_SECRET=$(cat "${JWT_SECRET_FILE}")
+
+    {
+        printf 'DATABASE_URL=postgresql://san_admin:%s@db:5432/san_zoning\n' "${DB_PASSWORD}"
+        printf 'CORS_ORIGIN=http://%s:8080\n'                                "${PRIMARY_IP}"
+        printf 'MDS_USERNAME=admin\n'
+        printf 'MDS_PASSWORD=%s\n'                                           "${MDS_PASSWORD}"
+        printf 'MDS_PORT=443\n'
+        printf 'MDS_SIMULATE=false\n'
+        printf 'FRONTEND_PORT=8080\n'
+        printf 'JWT_SECRET=%s\n'                                             "${JWT_SECRET}"
+        printf 'JWT_EXPIRES=8h\n'
+        printf 'ADMIN_PASSWORD=%s\n'                                         "${ADMIN_PASSWORD}"
+        printf 'SAN_SEED=false\n'
+    } > "${ENV_FILE}"
+    chmod 640 "${ENV_FILE}"
+    printf "  .env written (IP: %s)\n" "${PRIMARY_IP}"
+}
+
+start() {
+    # Do not start if initial setup has not been completed.
+    # Starting with placeholder credentials corrupts the database init.
+    if [ ! -f "${SETUP_STAMP}" ]; then
+        printf "SAN Platform: skipping start — initial setup not yet complete.\n"
+        printf "  Run: /root/setup.sh\n"
+        return 0
+    fi
+
+    printf "Starting SAN Platform:\n"
+    write_env
+    cd "${COMPOSE_DIR}" || { printf "  FAIL: compose dir not found\n"; return 1; }
+
+    docker compose --env-file "${ENV_FILE}" up -d --remove-orphans \
+        >> "${LOG_FILE}" 2>&1
+    [ $? -eq 0 ] && printf "  OK\n" || printf "  FAIL (see %s)\n" "${LOG_FILE}"
+}
+
+stop() {
+    printf "Stopping SAN Platform:\n"
+    cd "${COMPOSE_DIR}" || { printf "  FAIL\n"; return 1; }
+    docker compose --env-file "${ENV_FILE}" down --timeout 30 \
+        >> "${LOG_FILE}" 2>&1
+    [ $? -eq 0 ] && printf "  OK\n" || printf "  FAIL\n"
+}
+
+restart() {
+    stop
+    sleep 2
+    start
+}
+
+status() {
+    cd "${COMPOSE_DIR}" || return 1
+    docker compose ps
+}
+
+case "$1" in
+    start)   start   ;;
+    stop)    stop    ;;
+    restart) restart ;;
+    status)  status  ;;
+    *)
+        printf "Usage: %s {start|stop|restart|status}\n" "$0"
+        exit 1 ;;
+esac

@@ -148,6 +148,23 @@ chmod 440 "${TARGET_DIR}/etc/sudoers.d/admin" 2>/dev/null || true
 
 log "admin user configured"
 
+# Ensure sudo is available — BusyBox includes sudo; create symlink if needed
+if [ ! -f "${TARGET_DIR}/usr/bin/sudo" ] && [ -f "${TARGET_DIR}/bin/busybox" ]; then
+    ln -sfn /bin/busybox "${TARGET_DIR}/usr/bin/sudo" 2>/dev/null || true
+    log "Created sudo symlink to busybox"
+fi
+
+# Create chrony runtime dirs
+mkdir -p "${TARGET_DIR}/var/lib/chrony"
+mkdir -p "${TARGET_DIR}/var/log/chrony"
+log "Created chrony directories"
+
+# Set correct permissions on sudoers.d
+chmod 440 "${TARGET_DIR}/etc/sudoers.d/admin" 2>/dev/null || true
+
+# Ensure factory-reset.sh is executable
+chmod +x "${TARGET_DIR}/root/factory-reset.sh" 2>/dev/null || true
+
 # ── 7. Root setup wizard ─────────────────────────────────────────────────────
 chmod +x "${TARGET_DIR}/root/setup.sh" 2>/dev/null || true
 log "setup.sh made executable"

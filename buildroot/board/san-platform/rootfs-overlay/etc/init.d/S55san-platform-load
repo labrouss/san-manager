@@ -1,0 +1,44 @@
+#!/bin/sh
+# /etc/init.d/S50san-platform-load
+#
+# Loads pre-bundled Docker image tarballs into the local Docker daemon.
+# Only runs once — a stamp file prevents re-loading on subsequent boots.
+
+IMAGES_DIR="/opt/san-platform/images"
+STAMP="/var/lib/san-platform/.images-loaded"
+
+start() {
+    [ -f "${STAMP}" ] && {
+        echo "Docker images already loaded — skipping."
+        return 0
+    }
+
+    echo "Loading Docker images from ${IMAGES_DIR}..."
+
+    for tarball in "${IMAGES_DIR}"/*.tar.gz; do
+        [ -f "${tarball}" ] || continue
+        name=$(basename "${tarball}" .tar.gz)
+        echo "  Loading ${name}..."
+        docker load < "${tarball}" || {
+            echo "  ERROR: failed to load ${name}"
+            return 1
+        }
+    done
+
+    echo "All Docker images loaded."
+    date -u > "${STAMP}"
+}
+
+stop() {
+    : # nothing to stop
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop  ;;
+    restart) stop; start ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac

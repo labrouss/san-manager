@@ -1,41 +1,24 @@
-# /etc/ssh/sshd_config
-# SAN Platform SSH daemon configuration
-
-# ── Listen ────────────────────────────────────────────────────────────────────
+# /etc/ssh/sshd_config — SAN Platform (Dropbear-compatible subset)
 Port 22
 AddressFamily inet
 ListenAddress 0.0.0.0
 
-# ── Authentication ────────────────────────────────────────────────────────────
-# Disable root SSH login — use admin user + sudo instead
 PermitRootLogin no
+AllowUsers admin
 
-# Allow password auth for initial setup convenience.
-# Switch to "no" and use keys only after adding your public key.
 PasswordAuthentication yes
 PubkeyAuthentication yes
 AuthorizedKeysFile .ssh/authorized_keys
-
-# Disable unused auth methods
-ChallengeResponseAuthentication no
-UsePAM no
-KerberosAuthentication no
-GSSAPIAuthentication no
 PermitEmptyPasswords no
 
-# ── Allowed users ─────────────────────────────────────────────────────────────
-AllowUsers admin
+ChallengeResponseAuthentication no
 
-# ── Session ───────────────────────────────────────────────────────────────────
 LoginGraceTime 30
 MaxAuthTries 4
 MaxSessions 10
 ClientAliveInterval 120
 ClientAliveCountMax 3
 
-# ── Features ─────────────────────────────────────────────────────────────────
 X11Forwarding no
 PrintMotd yes
-PrintLastLog yes
 TCPKeepAlive yes
-Compression delayed

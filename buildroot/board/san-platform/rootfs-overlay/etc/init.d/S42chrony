@@ -1,0 +1,29 @@
+#!/bin/sh
+# /etc/init.d/S42chrony — NTP time sync via chrony
+
+PIDFILE="/var/run/chronyd.pid"
+CONF="/etc/chrony.conf"
+
+start() {
+    printf "Starting chrony: "
+    mkdir -p /var/lib/chrony /var/log/chrony
+    start-stop-daemon -S -q -m -p "${PIDFILE}" \
+        -x /usr/sbin/chronyd -- -f "${CONF}"
+    [ $? -eq 0 ] && printf "OK\n" || printf "FAIL\n"
+}
+
+stop() {
+    printf "Stopping chrony: "
+    start-stop-daemon -K -q -p "${PIDFILE}"
+    [ $? -eq 0 ] && printf "OK\n" || printf "FAIL\n"
+    rm -f "${PIDFILE}"
+}
+
+case "$1" in
+    start)        start  ;;
+    stop)         stop   ;;
+    restart) stop; start ;;
+    *)
+        printf "Usage: %s {start|stop|restart}\n" "$0"
+        exit 1 ;;
+esac
