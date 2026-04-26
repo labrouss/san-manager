@@ -344,7 +344,7 @@ jobs:
           } || echo "  OK: no BR2_LEGACY after olddefconfig"
 
           echo "=== Active config snapshot ==="
-          grep -E "^BR2_(INIT|TOOLCHAIN_BUILDROOT_(WCHAR|TLS|MUSL|CXX)|PACKAGE_(DOCKER|SYSTEMD)|LINUX_KERNEL)" .config | sort
+          grep -E "^BR2_(INIT|TOOLCHAIN_BUILDROOT_(WCHAR|TLS|MUSL|CXX)|PACKAGE_DOCKER|LINUX_KERNEL)" .config | sort
 
             # ── Build! ─────────────────────────────────────────────────────────────
       - name: Run Buildroot make
