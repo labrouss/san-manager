@@ -1,69 +1,99 @@
 #!/bin/sh
 # /etc/init.d/S40docker
 #
-# Start/stop the Docker Engine daemon (dockerd).
-# Must run before S50san-platform-load and S60san-platform.
+# Mounts cgroup subsystems required by Docker, then starts dockerd.
+# /proc and /sys are already mounted by BusyBox init via /etc/fstab.
 
-PIDFILE="/var/run/docker.pid"
+PIDFILE="/var/run/dockerd.pid"
 DOCKER_OPTS="--log-level=warn"
+
+mount_cgroups() {
+    # The cgroup tmpfs root is mounted via fstab at /sys/fs/cgroup.
+    # Wait for it to be ready.
+    i=0
+    while [ $i -lt 10 ] && ! mountpoint -q /sys/fs/cgroup 2>/dev/null; do
+        mount -t tmpfs cgroup_root /sys/fs/cgroup 2>/dev/null || true
+        sleep 1
+        i=$((i + 1))
+    done
+
+    # Mount each cgroup v1 subsystem
+    for subsys in cpu cpuacct cpuset memory blkio devices freezer \
+                  net_cls net_prio pids hugetlb; do
+        dir="/sys/fs/cgroup/${subsys}"
+        if [ ! -d "${dir}" ]; then
+            mkdir -p "${dir}"
+        fi
+        if ! mountpoint -q "${dir}" 2>/dev/null; then
+            mount -t cgroup -o "${subsys}" "${subsys}" "${dir}" 2>/dev/null || true
+        fi
+    done
+
+    # Unified cgroup hierarchy symlink expected by some tools
+    if [ ! -e /sys/fs/cgroup/unified ]; then
+        mkdir -p /sys/fs/cgroup/unified
+        mount -t cgroup2 none /sys/fs/cgroup/unified 2>/dev/null || true
+    fi
+}
+
+enable_ip_forward() {
+    # /proc/sys is only available after /proc is mounted
+    if [ -f /proc/sys/net/ipv4/ip_forward ]; then
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+    fi
+    # bridge-nf-call-iptables appears only after br_netfilter is loaded
+    if [ -f /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
+        echo 1 > /proc/sys/net/bridge/bridge-nf-call-iptables
+    fi
+}
+
+load_modules() {
+    modprobe overlay      2>/dev/null || true
+    modprobe br_netfilter 2>/dev/null || true
+    # After br_netfilter loads, the bridge sysctl becomes available
+    if [ -f /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
+        echo 1 > /proc/sys/net/bridge/bridge-nf-call-iptables
+    fi
+}
 
 start() {
     printf "Starting Docker: "
 
-    # Docker requires cgroups v1 hierarchy mounts under BusyBox init.
-    # Mount them if not already mounted.
-    if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
-        mount -t tmpfs cgroup /sys/fs/cgroup 2>/dev/null || true
-    fi
-    for subsys in cpu cpuacct cpuset memory blkio devices freezer net_cls net_prio; do
-        CGDIR="/sys/fs/cgroup/${subsys}"
-        if [ ! -d "${CGDIR}" ]; then
-            mkdir -p "${CGDIR}"
-            mount -t cgroup -o "${subsys}" cgroup "${CGDIR}" 2>/dev/null || true
-        fi
-    done
-
-    # Load kernel modules required by Docker
-    modprobe overlay   2>/dev/null || true
-    modprobe br_netfilter 2>/dev/null || true
-
-    # Enable IP forwarding (required for Docker bridge networking)
-    echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
-    echo 1 > /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null || true
+    mount_cgroups
+    load_modules
+    enable_ip_forward
 
     start-stop-daemon -S -b -m -p "${PIDFILE}" \
         -x /usr/bin/dockerd -- ${DOCKER_OPTS}
-    [ $? -eq 0 ] && echo "OK" || echo "FAIL"
 
-    # Wait until Docker socket is ready (up to 30 seconds)
+    # Wait for Docker socket (up to 30s)
     i=0
     while [ $i -lt 30 ] && [ ! -S /var/run/docker.sock ]; do
         sleep 1
         i=$((i + 1))
     done
-    [ -S /var/run/docker.sock ] && echo "Docker socket ready." \
-        || echo "WARNING: Docker socket not ready after 30s"
+
+    if [ -S /var/run/docker.sock ]; then
+        printf "OK\n"
+    else
+        printf "FAIL (socket not ready after 30s)\n"
+        return 1
+    fi
 }
 
 stop() {
     printf "Stopping Docker: "
-    start-stop-daemon -K -p "${PIDFILE}" -x /usr/bin/dockerd
-    [ $? -eq 0 ] && echo "OK" || echo "FAIL"
+    start-stop-daemon -K -q -p "${PIDFILE}"
+    [ $? -eq 0 ] && printf "OK\n" || printf "FAIL\n"
     rm -f "${PIDFILE}"
 }
 
-restart() {
-    stop
-    sleep 2
-    start
-}
-
 case "$1" in
-    start)   start   ;;
-    stop)    stop    ;;
-    restart) restart ;;
+    start)        start  ;;
+    stop)         stop   ;;
+    restart) stop; start ;;
     *)
-        echo "Usage: $0 {start|stop|restart}"
+        printf "Usage: %s {start|stop|restart}\n" "$0"
         exit 1
         ;;
 esac

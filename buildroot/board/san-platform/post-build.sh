@@ -12,7 +12,7 @@ log "TARGET_DIR = ${TARGET_DIR}"
 
 # ── 1. Make init.d scripts executable ────────────────────────────────────────
 INITD="${TARGET_DIR}/etc/init.d"
-for script in S01firstboot S40docker S50san-platform-load S60san-platform; do
+for script in S00mountfs S01firstboot S40docker S50san-platform-load S50sshd S60san-platform; do
     if [ -f "${INITD}/${script}" ]; then
         chmod +x "${INITD}/${script}"
         log "Made executable: ${script}"

@@ -1,0 +1,20 @@
+# /etc/fstab
+# Static filesystem table
+#
+# <device>          <mountpoint>        <type>      <options>               <dump> <pass>
+
+# Root filesystem (mounted by kernel from cmdline)
+/dev/sda2           /                   ext4        defaults,noatime        0      1
+
+# Virtual kernel filesystems — must be mounted before any services start
+proc                /proc               proc        defaults                0      0
+sysfs               /sys                sysfs       defaults                0      0
+devtmpfs            /dev                devtmpfs    defaults,mode=0755      0      0
+devpts              /dev/pts            devpts      defaults,gid=5,mode=620 0      0
+tmpfs               /dev/shm            tmpfs       defaults                0      0
+tmpfs               /tmp                tmpfs       defaults,nosuid,nodev   0      0
+tmpfs               /run                tmpfs       defaults,nosuid,nodev   0      0
+
+# cgroup v1 hierarchy — required by Docker Engine
+# BusyBox init does not auto-mount cgroups; we do it here.
+cgroup_root         /sys/fs/cgroup      tmpfs       mode=0755               0      0

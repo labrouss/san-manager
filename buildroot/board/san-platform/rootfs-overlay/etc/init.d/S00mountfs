@@ -1,0 +1,64 @@
+#!/bin/sh
+# /etc/init.d/S00mountfs
+#
+# Mounts essential virtual filesystems before any other service starts.
+# BusyBox init should handle this via /etc/fstab, but we ensure it
+# explicitly here as a safety net.
+
+start() {
+    # /proc — process information
+    if ! mountpoint -q /proc 2>/dev/null; then
+        mount -t proc proc /proc
+    fi
+
+    # /sys — kernel device/driver interface
+    if ! mountpoint -q /sys 2>/dev/null; then
+        mount -t sysfs sysfs /sys
+    fi
+
+    # /dev — device nodes (devtmpfs populated by kernel)
+    if ! mountpoint -q /dev 2>/dev/null; then
+        mount -t devtmpfs devtmpfs /dev
+    fi
+
+    # /dev/pts — pseudo-terminals (required for SSH, screen, docker exec)
+    mkdir -p /dev/pts
+    if ! mountpoint -q /dev/pts 2>/dev/null; then
+        mount -t devpts devpts /dev/pts -o gid=5,mode=620
+    fi
+
+    # /dev/shm — POSIX shared memory
+    mkdir -p /dev/shm
+    if ! mountpoint -q /dev/shm 2>/dev/null; then
+        mount -t tmpfs tmpfs /dev/shm
+    fi
+
+    # /run — runtime data (PIDs, sockets)
+    mkdir -p /run
+    if ! mountpoint -q /run 2>/dev/null; then
+        mount -t tmpfs tmpfs /run -o nosuid,nodev,mode=0755
+    fi
+
+    # /sys/fs/cgroup root tmpfs — subsystems mounted by S40docker
+    mkdir -p /sys/fs/cgroup
+    if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
+        mount -t tmpfs cgroup_root /sys/fs/cgroup -o mode=0755
+    fi
+
+    # Remount root read-write if it came up read-only
+    mount -o remount,rw / 2>/dev/null || true
+}
+
+stop() {
+    : # virtual filesystems are unmounted by the kernel at shutdown
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop  ;;
+    restart) start ;;
+    *)
+        printf "Usage: %s {start|stop|restart}\n" "$0"
+        exit 1
+        ;;
+esac
