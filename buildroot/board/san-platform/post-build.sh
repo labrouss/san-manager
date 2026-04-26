@@ -10,7 +10,17 @@ log() { echo "[post-build] $*"; }
 
 log "TARGET_DIR = ${TARGET_DIR}"
 
-# ── 1. Make ALL init.d scripts executable ────────────────────────────────────
+# ── 1. Remove stale/superseded init.d scripts ────────────────────────────────
+# Guards against leftover files from renames surviving in the overlay or repo.
+INITD="${TARGET_DIR}/etc/init.d"
+for stale in S40docker S50san-platform-load S60san-platform; do
+    if [ -f "${INITD}/${stale}" ]; then
+        rm -f "${INITD}/${stale}"
+        log "Removed stale script: ${stale}"
+    fi
+done
+
+# ── 2. Make ALL init.d scripts executable ────────────────────────────────────
 # Git and Buildroot's overlay copy do not reliably preserve execute bits.
 # Explicitly chmod +x every script in the target /etc/init.d/.
 INITD="${TARGET_DIR}/etc/init.d"
