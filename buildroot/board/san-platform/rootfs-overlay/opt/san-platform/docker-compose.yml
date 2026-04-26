@@ -1,21 +1,16 @@
 # =============================================================================
-# /opt/san-platform/docker-compose.yml
-#
-# Production appliance version — identical to the development compose file
-# except:
-#   • Images are referenced by name (loaded from embedded tarballs)
-#   • No build: sections (images are pre-built)
-#   • Secrets use plain files from /opt/san-platform/secrets/
-#     (acceptable for a locked-down appliance VM)
+# /opt/san-platform/docker-compose.yml — Production appliance
 # =============================================================================
 
 networks:
+  # db-net is internal — only backend can reach the database, never exposed
   db-net:
     driver: bridge
     internal: true
+  # api-net is NOT internal — frontend needs host port mapping to work
   api-net:
     driver: bridge
-    internal: true
+  # switch-net is NOT internal — backend needs to reach MDS switches on LAN
   switch-net:
     driver: bridge
 
@@ -41,9 +36,6 @@ secrets:
 
 services:
   db:
-    image: san-platform/backend:latest   # TimescaleDB bundled inside backend image
-    # NOTE: The actual DB image is timescale/timescaledb:latest-pg16
-    # The correct image reference is set in the load script.
     image: timescale/timescaledb:latest-pg16
     container_name: san-db
     restart: unless-stopped
@@ -58,13 +50,12 @@ services:
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - /opt/san-platform/db/init/01-timescale.sql:/docker-entrypoint-initdb.d/01-timescale.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U san_admin -d san_zoning"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 20s
+      start_period: 30s
     logging:
       driver: json-file
       options:
@@ -76,9 +67,9 @@ services:
     container_name: san-backend
     restart: unless-stopped
     networks:
-      - db-net
-      - api-net
-      - switch-net
+      - db-net      # talks to database
+      - api-net     # serves API to frontend
+      - switch-net  # reaches MDS switches on the LAN
     depends_on:
       db:
         condition: service_healthy
@@ -87,17 +78,15 @@ services:
       - mds_password
     environment:
       NODE_ENV: production
-      PORT: 3001
+      PORT: "3001"
       LOG_LEVEL: info
       DB_HOST: db
-      DB_PORT: 5432
+      DB_PORT: "5432"
       DB_USER: san_admin
       DB_NAME: san_zoning
-      DB_PASSWORD_FILE: /run/secrets/db_password
       DATABASE_URL: ${DATABASE_URL}
       CORS_ORIGIN: ${CORS_ORIGIN}
       MDS_USERNAME: ${MDS_USERNAME}
-      MDS_PASSWORD_FILE: /run/secrets/mds_password
       MDS_PORT: ${MDS_PORT:-443}
       MDS_SIMULATE: ${MDS_SIMULATE:-false}
       SAN_SEED: ${SAN_SEED:-false}
@@ -123,12 +112,12 @@ services:
     container_name: san-frontend
     restart: unless-stopped
     networks:
-      - api-net
+      - api-net     # talks to backend API
     depends_on:
       backend:
         condition: service_healthy
     ports:
-      - "${FRONTEND_PORT:-8080}:8080"
+      - "${FRONTEND_PORT:-8080}:8080"   # exposed to host network → browser access
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
       interval: 20s

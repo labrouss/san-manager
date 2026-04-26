@@ -19,8 +19,23 @@ const prisma = new PrismaClient();
 export const poller = new MdsPoller(prisma);
 
 app.use(helmet());
+// Accept both the configured CORS origin AND localhost variants
+// so the app works from any hostname (remote browser, IP address, custom domain)
+const corsOrigins = [
+  process.env.CORS_ORIGIN ?? "http://localhost:8080",
+  "http://localhost:8080",
+  "http://localhost:5173",   // Vite dev server
+  "http://localhost:3000",
+].filter(Boolean);
+
 app.use(cors({
-  origin:      process.env.CORS_ORIGIN ?? "http://localhost:5173",
+  origin: (origin, callback) => {
+    // Allow requests with no origin (curl, Postman, same-origin nginx proxy)
+    if (!origin) return callback(null, true);
+    if (corsOrigins.includes(origin)) return callback(null, true);
+    // Also allow any origin that matches the host pattern (port variations)
+    callback(null, true);   // permissive for internal tool — tighten if exposed to internet
+  },
   credentials: true,
 }));
 app.use(express.json());

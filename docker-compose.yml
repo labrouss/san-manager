@@ -170,7 +170,9 @@ services:
 
       # CORS — only the nginx frontend container needs to call the API
       # Use the frontend's internal hostname on api-net
-      CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-8080}
+      # Set CORS_ORIGIN to the URL you use to access the app in your browser.
+      # Examples: http://192.168.1.10:8080  or  http://dockerhost.example.com:8080
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:${FRONTEND_PORT:-8080}}
 
       # MDS switch credentials — password read from Docker secret
       MDS_USERNAME:      admin

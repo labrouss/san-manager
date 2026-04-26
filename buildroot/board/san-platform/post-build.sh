@@ -85,7 +85,11 @@ cat > "${TARGET_DIR}/etc/motd" << 'MOTD'
 
 MOTD
 
-# ── 7. Log file placeholder ───────────────────────────────────────────────────
+# ── 7. Root setup wizard ─────────────────────────────────────────────────────
+chmod +x "${TARGET_DIR}/root/setup.sh" 2>/dev/null || true
+log "setup.sh made executable"
+
+# ── 8. Log file placeholder ───────────────────────────────────────────────────
 touch "${TARGET_DIR}/var/log/san-platform.log" 2>/dev/null || true
 
 log "post-build.sh completed successfully"
