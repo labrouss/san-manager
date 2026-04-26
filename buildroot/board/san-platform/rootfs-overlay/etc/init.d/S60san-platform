@@ -1,0 +1,102 @@
+#!/bin/sh
+# /etc/init.d/S60san-platform
+#
+# Starts the SAN Management Platform Docker Compose stack.
+# Runs on every boot after Docker is up and images are loaded.
+
+COMPOSE_DIR="/opt/san-platform"
+ENV_FILE="${COMPOSE_DIR}/.env"
+
+write_env() {
+    # Detect primary IP address
+    PRIMARY_IP=$(ip route get 1.1.1.1 2>/dev/null \
+        | awk '/src/ { for(i=1;i<=NF;i++) if($i=="src") print $(i+1) }' \
+        | head -1)
+    PRIMARY_IP="${PRIMARY_IP:-127.0.0.1}"
+
+    SECRETS_DIR="${COMPOSE_DIR}/secrets"
+    DB_PASSWORD="san_secret"
+    MDS_PASSWORD="CHANGE_ME"
+
+    [ -f "${SECRETS_DIR}/db_password.txt" ] && \
+        DB_PASSWORD=$(cat "${SECRETS_DIR}/db_password.txt" | tr -d '[:space:]')
+    [ -f "${SECRETS_DIR}/mds_password.txt" ] && \
+        MDS_PASSWORD=$(cat "${SECRETS_DIR}/mds_password.txt" | tr -d '[:space:]')
+
+    JWT_SECRET_FILE="${SECRETS_DIR}/jwt_secret.txt"
+    [ -f "${JWT_SECRET_FILE}" ] || {
+        tr -dc 'A-Za-z0-9!@#$%^&*' < /dev/urandom | head -c 48 \
+            > "${JWT_SECRET_FILE}"
+        chmod 600 "${JWT_SECRET_FILE}"
+    }
+    JWT_SECRET=$(cat "${JWT_SECRET_FILE}")
+
+    cat > "${ENV_FILE}" << ENVEOF
+NODE_ENV=production
+PORT=3001
+LOG_LEVEL=info
+DATABASE_URL=postgresql://san_admin:${DB_PASSWORD}@db:5432/san_zoning
+CORS_ORIGIN=http://${PRIMARY_IP}:8080
+MDS_USERNAME=admin
+MDS_PASSWORD=${MDS_PASSWORD}
+MDS_PORT=443
+MDS_SIMULATE=false
+FRONTEND_PORT=8080
+JWT_SECRET=${JWT_SECRET}
+JWT_EXPIRES=8h
+ADMIN_PASSWORD=Admin1234!
+SAN_SEED=false
+ENVEOF
+    chmod 640 "${ENV_FILE}"
+    echo "  Runtime .env written (IP: ${PRIMARY_IP})"
+}
+
+start() {
+    printf "Starting SAN Platform: "
+
+    # Write runtime .env with current IP
+    write_env
+
+    cd "${COMPOSE_DIR}" || { echo "FAIL (dir not found)"; return 1; }
+
+    docker compose \
+        --env-file "${ENV_FILE}" \
+        up -d --remove-orphans \
+        >> /var/log/san-platform.log 2>&1
+
+    [ $? -eq 0 ] && echo "OK" || echo "FAIL (check /var/log/san-platform.log)"
+}
+
+stop() {
+    printf "Stopping SAN Platform: "
+    cd "${COMPOSE_DIR}" || { echo "FAIL"; return 1; }
+
+    docker compose \
+        --env-file "${ENV_FILE}" \
+        down --timeout 30 \
+        >> /var/log/san-platform.log 2>&1
+
+    [ $? -eq 0 ] && echo "OK" || echo "FAIL"
+}
+
+restart() {
+    stop
+    sleep 2
+    start
+}
+
+status() {
+    cd "${COMPOSE_DIR}" || return 1
+    docker compose ps
+}
+
+case "$1" in
+    start)   start   ;;
+    stop)    stop    ;;
+    restart) restart ;;
+    status)  status  ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac

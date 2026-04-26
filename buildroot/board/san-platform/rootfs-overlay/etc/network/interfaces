@@ -1,0 +1,8 @@
+# /etc/network/interfaces
+# BusyBox networking — DHCP on primary interface
+
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp

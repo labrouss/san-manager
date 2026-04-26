@@ -1,0 +1,64 @@
+#!/bin/sh
+# /etc/init.d/S01firstboot
+#
+# First-boot initialization:
+#   - Resize root filesystem to fill partition
+#   - Create /var/lib/san-platform data directories
+#
+# Runs once: a stamp file prevents re-execution on subsequent boots.
+
+STAMP="/var/lib/san-platform/.firstboot-done"
+
+start() {
+    [ -f "${STAMP}" ] && return 0
+
+    echo "Running first-boot initialization..."
+
+    # Resize root partition to fill available disk space
+    # sda2 = GPT partition 2 = root ext4
+    if command -v resize2fs > /dev/null 2>&1; then
+        echo "  Resizing root filesystem..."
+        # Tell the kernel to re-read the partition table
+        blockdev --rereadpt /dev/sda 2>/dev/null || true
+        resize2fs /dev/sda2 2>/dev/null || true
+    fi
+
+    # Create data directories
+    mkdir -p /var/lib/san-platform/pg_data
+    mkdir -p /var/lib/san-platform/logs
+    chmod 700 /var/lib/san-platform/pg_data
+    chmod 755 /var/lib/san-platform/logs
+
+    # Generate JWT secret on first boot if absent
+    SECRETS_DIR=/opt/san-platform/secrets
+    if [ ! -f "${SECRETS_DIR}/jwt_secret.txt" ]; then
+        mkdir -p "${SECRETS_DIR}"
+        tr -dc 'A-Za-z0-9!@#$%^&*' < /dev/urandom | head -c 48 \
+            > "${SECRETS_DIR}/jwt_secret.txt"
+        chmod 600 "${SECRETS_DIR}/jwt_secret.txt"
+        echo "  JWT secret generated"
+    fi
+
+    mkdir -p "$(dirname "${STAMP}")"
+    date -u > "${STAMP}"
+    echo "First-boot initialization complete."
+}
+
+stop() {
+    : # nothing to stop
+}
+
+restart() {
+    stop
+    start
+}
+
+case "$1" in
+    start)   start   ;;
+    stop)    stop    ;;
+    restart) restart ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac

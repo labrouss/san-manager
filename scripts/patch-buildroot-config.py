@@ -39,11 +39,8 @@ patches = {
     "BR2_TOOLCHAIN_BUILDROOT_TLS":   "y",
 
     # ── Init system ──────────────────────────────────────────────────────────
-    "BR2_INIT_BUSYBOX":              None,   # disable
-    "BR2_INIT_SYSTEMD":              "y",
-    "BR2_PACKAGE_SYSTEMD":           "y",
-    "BR2_PACKAGE_SYSTEMD_NETWORKD":  "y",
-    "BR2_PACKAGE_SYSTEMD_RESOLVED":  "y",
+    # Using BusyBox init (default) — no systemd forcing needed.
+    # init.d scripts handle service startup instead.
 
     # ── curl: BR2_PACKAGE_CURL is the legacy name — must not be present ─────────
     # The correct symbols are BR2_PACKAGE_LIBCURL + BR2_PACKAGE_LIBCURL_CURL,

@@ -10,28 +10,22 @@ log() { echo "[post-build] $*"; }
 
 log "TARGET_DIR = ${TARGET_DIR}"
 
-# ── 1. Enable systemd services ────────────────────────────────────────────────
-WANTS_DIR="${TARGET_DIR}/etc/systemd/system/multi-user.target.wants"
-mkdir -p "${WANTS_DIR}"
-
-for svc in san-platform-load san-platform; do
-    ln -sfn "/etc/systemd/system/${svc}.service" \
-        "${WANTS_DIR}/${svc}.service"
-    log "Enabled ${svc}.service"
+# ── 1. Make init.d scripts executable ────────────────────────────────────────
+INITD="${TARGET_DIR}/etc/init.d"
+for script in S01firstboot S40docker S50san-platform-load S60san-platform; do
+    if [ -f "${INITD}/${script}" ]; then
+        chmod +x "${INITD}/${script}"
+        log "Made executable: ${script}"
+    else
+        log "WARNING: ${INITD}/${script} not found in overlay"
+    fi
 done
 
 # ── 2. Runtime data directories ───────────────────────────────────────────────
 mkdir -p "${TARGET_DIR}/var/lib/san-platform/pg_data"
 mkdir -p "${TARGET_DIR}/var/lib/san-platform/logs"
-
-# tmpfiles.d — mkdir -p required; directory may not exist in minimal rootfs
-mkdir -p "${TARGET_DIR}/etc/tmpfiles.d"
-cat > "${TARGET_DIR}/etc/tmpfiles.d/san-platform.conf" << 'TMPFILES'
-d /var/lib/san-platform        0700 root root -
-d /var/lib/san-platform/pg_data 0700 root root -
-d /var/lib/san-platform/logs   0755 root root -
-TMPFILES
-log "Created tmpfiles.d config"
+mkdir -p "${TARGET_DIR}/var/log"
+chmod 700 "${TARGET_DIR}/var/lib/san-platform/pg_data"
 
 # ── 3. Secrets directory ──────────────────────────────────────────────────────
 SECRETS_DIR="${TARGET_DIR}/opt/san-platform/secrets"
@@ -42,12 +36,14 @@ echo "san_secret" > "${SECRETS_DIR}/db_password.txt"
 echo "CHANGE_ME"  > "${SECRETS_DIR}/mds_password.txt"
 chmod 600 "${SECRETS_DIR}/db_password.txt"
 chmod 600 "${SECRETS_DIR}/mds_password.txt"
-log "Placeholder secrets written (operator must update these!)"
+log "Placeholder secrets written"
 
 # ── 4. Make all helper scripts executable ─────────────────────────────────────
 BIN_DIR="${TARGET_DIR}/opt/san-platform/bin"
-chmod +x "${BIN_DIR}"/*.sh 2>/dev/null || true
-log "Helper scripts made executable"
+if [ -d "${BIN_DIR}" ]; then
+    chmod +x "${BIN_DIR}"/*.sh 2>/dev/null || true
+    log "Helper scripts made executable"
+fi
 
 # ── 5. Docker daemon configuration ────────────────────────────────────────────
 mkdir -p "${TARGET_DIR}/etc/docker"
@@ -67,29 +63,7 @@ cat > "${TARGET_DIR}/etc/docker/daemon.json" << 'DOCKERD'
 DOCKERD
 log "Docker daemon.json written"
 
-# ── 6. SSH host-key generation on first boot ──────────────────────────────────
-if [ -d "${TARGET_DIR}/etc/ssh" ]; then
-    mkdir -p "${TARGET_DIR}/etc/systemd/system"
-    cat > "${TARGET_DIR}/etc/systemd/system/ssh-keygen-firstboot.service" << 'SSH_SVC'
-[Unit]
-Description=Generate SSH host keys on first boot
-ConditionPathExists=!/etc/ssh/ssh_host_rsa_key
-Before=ssh.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/ssh-keygen -A
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-SSH_SVC
-    ln -sfn /etc/systemd/system/ssh-keygen-firstboot.service \
-        "${WANTS_DIR}/ssh-keygen-firstboot.service"
-    log "SSH host-key generation service enabled"
-fi
-
-# ── 7. MOTD ───────────────────────────────────────────────────────────────────
+# ── 6. MOTD ───────────────────────────────────────────────────────────────────
 cat > "${TARGET_DIR}/etc/motd" << 'MOTD'
 
   ╔══════════════════════════════════════════════════════╗
@@ -100,28 +74,18 @@ cat > "${TARGET_DIR}/etc/motd" << 'MOTD'
   Login   →  admin / Admin1234!  (CHANGE IMMEDIATELY)
 
   Manage the stack:
-    systemctl status  san-platform
-    systemctl restart san-platform
+    /etc/init.d/S60san-platform status
+    /etc/init.d/S60san-platform restart
     docker compose -f /opt/san-platform/docker-compose.yml ps
 
   Change secrets:
     vi /opt/san-platform/secrets/db_password.txt
     vi /opt/san-platform/secrets/mds_password.txt
-    systemctl restart san-platform
+    /etc/init.d/S60san-platform restart
 
 MOTD
 
-# ── 8. Copy kernel to /boot on rootfs ────────────────────────────────────────
-# GRUB EFI loads the kernel from /boot/bzImage on the root (ext4) partition.
-# Buildroot places bzImage in BINARIES_DIR (output/images/), not in TARGET_DIR.
-# We copy it here so it ends up in the root filesystem image.
-mkdir -p "${TARGET_DIR}/boot"
-if [ -n "${BINARIES_DIR:-}" ] && [ -f "${BINARIES_DIR}/bzImage" ]; then
-    cp "${BINARIES_DIR}/bzImage" "${TARGET_DIR}/boot/bzImage"
-    log "Copied bzImage to /boot"
-else
-    # BINARIES_DIR may not be set during post-build; bzImage copied in post-image
-    log "bzImage not yet available in BINARIES_DIR — will be handled in post-image.sh"
-fi
+# ── 7. Log file placeholder ───────────────────────────────────────────────────
+touch "${TARGET_DIR}/var/log/san-platform.log" 2>/dev/null || true
 
 log "post-build.sh completed successfully"

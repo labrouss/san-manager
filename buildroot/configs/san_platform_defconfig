@@ -7,7 +7,6 @@
 # Moving-target symbols (LATEST_VERSION, LATEST_LTS_*) are avoided entirely
 # — an explicit kernel version is pinned instead for build reproducibility.
 #
-# Symbols that require dependency ordering (systemd, wchar, TLS, libcurl)
 # are injected by scripts/patch-buildroot-config.py after defconfig load.
 # =============================================================================
 
@@ -28,7 +27,6 @@ BR2_TARGET_GENERIC_ISSUE="SAN Management Platform"
 BR2_TARGET_TZ_INFO=y
 BR2_TARGET_LOCALTIME="UTC"
 
-# ── Init: systemd injected by patch script after defconfig load ───────────────
 
 # ── Kernel — explicit version (no moving-target LATEST_* symbols) ─────────────
 # 6.6.63 is the version Buildroot 2024.02.9 pins as its LTS kernel.

@@ -1,0 +1,69 @@
+#!/bin/sh
+# /etc/init.d/S40docker
+#
+# Start/stop the Docker Engine daemon (dockerd).
+# Must run before S50san-platform-load and S60san-platform.
+
+PIDFILE="/var/run/docker.pid"
+DOCKER_OPTS="--log-level=warn"
+
+start() {
+    printf "Starting Docker: "
+
+    # Docker requires cgroups v1 hierarchy mounts under BusyBox init.
+    # Mount them if not already mounted.
+    if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
+        mount -t tmpfs cgroup /sys/fs/cgroup 2>/dev/null || true
+    fi
+    for subsys in cpu cpuacct cpuset memory blkio devices freezer net_cls net_prio; do
+        CGDIR="/sys/fs/cgroup/${subsys}"
+        if [ ! -d "${CGDIR}" ]; then
+            mkdir -p "${CGDIR}"
+            mount -t cgroup -o "${subsys}" cgroup "${CGDIR}" 2>/dev/null || true
+        fi
+    done
+
+    # Load kernel modules required by Docker
+    modprobe overlay   2>/dev/null || true
+    modprobe br_netfilter 2>/dev/null || true
+
+    # Enable IP forwarding (required for Docker bridge networking)
+    echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+    echo 1 > /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null || true
+
+    start-stop-daemon -S -b -m -p "${PIDFILE}" \
+        -x /usr/bin/dockerd -- ${DOCKER_OPTS}
+    [ $? -eq 0 ] && echo "OK" || echo "FAIL"
+
+    # Wait until Docker socket is ready (up to 30 seconds)
+    i=0
+    while [ $i -lt 30 ] && [ ! -S /var/run/docker.sock ]; do
+        sleep 1
+        i=$((i + 1))
+    done
+    [ -S /var/run/docker.sock ] && echo "Docker socket ready." \
+        || echo "WARNING: Docker socket not ready after 30s"
+}
+
+stop() {
+    printf "Stopping Docker: "
+    start-stop-daemon -K -p "${PIDFILE}" -x /usr/bin/dockerd
+    [ $? -eq 0 ] && echo "OK" || echo "FAIL"
+    rm -f "${PIDFILE}"
+}
+
+restart() {
+    stop
+    sleep 2
+    start
+}
+
+case "$1" in
+    start)   start   ;;
+    stop)    stop    ;;
+    restart) restart ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
