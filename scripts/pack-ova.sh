@@ -90,12 +90,14 @@ cat > "${OVF}" << OVFEOF
       </ovf:System>
 
       <ovf:Item>
+        <rasd:ElementName>2 virtual CPUs</rasd:ElementName>
         <rasd:InstanceID>1</rasd:InstanceID>
         <rasd:ResourceType>3</rasd:ResourceType>
         <rasd:VirtualQuantity>2</rasd:VirtualQuantity>
       </ovf:Item>
 
       <ovf:Item>
+        <rasd:ElementName>2048 MB RAM</rasd:ElementName>
         <rasd:InstanceID>2</rasd:InstanceID>
         <rasd:ResourceType>4</rasd:ResourceType>
         <rasd:VirtualQuantity>2048</rasd:VirtualQuantity>
@@ -103,12 +105,14 @@ cat > "${OVF}" << OVFEOF
       </ovf:Item>
 
       <ovf:Item>
+        <rasd:ElementName>SATA controller 0</rasd:ElementName>
         <rasd:InstanceID>3</rasd:InstanceID>
         <rasd:ResourceType>20</rasd:ResourceType>
         <rasd:ResourceSubType>vmware.sata.ahci</rasd:ResourceSubType>
       </ovf:Item>
 
       <ovf:Item>
+        <rasd:ElementName>Hard disk 1</rasd:ElementName>
         <rasd:InstanceID>4</rasd:InstanceID>
         <rasd:ResourceType>17</rasd:ResourceType>
         <rasd:Parent>3</rasd:Parent>
@@ -117,6 +121,7 @@ cat > "${OVF}" << OVFEOF
       </ovf:Item>
 
       <ovf:Item>
+        <rasd:ElementName>Network adapter 1</rasd:ElementName>
         <rasd:InstanceID>5</rasd:InstanceID>
         <rasd:ResourceType>10</rasd:ResourceType>
         <rasd:ResourceSubType>VMXNET3</rasd:ResourceSubType>
