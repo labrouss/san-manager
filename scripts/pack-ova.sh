@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
 # scripts/pack-ova.sh
+# Converts a raw disk image to an OVA importable by VMware Workstation/ESXi.
 #
-# Converts a raw disk image into a VMware-compatible OVA.
-# Modelled on the working Debian cloud image OVA packing script.
+# Usage: pack-ova.sh <raw-disk.img> <output.ova> <version> <disk-size-mb>
 #
-# Usage:
-#   pack-ova.sh <raw-disk.img> <output.ova> <version> <disk-size-mb>
+# OVA tar member order (required by OVF spec + VMware):
+#   1. .ovf   — descriptor
+#   2. .mf    — SHA256 manifest
+#   3. .vmdk  — disk image
 # =============================================================================
 set -euo pipefail
 
@@ -27,198 +29,153 @@ NAME="san-platform"
 OVF="${TMPDIR_OVA}/${NAME}.ovf"
 VMDK="${TMPDIR_OVA}/${NAME}-disk.vmdk"
 MF="${TMPDIR_OVA}/${NAME}.mf"
-
+VMDK_BASENAME=$(basename "${VMDK}")
 DISK_BYTES=$(( DISK_MB * 1024 * 1024 ))
 
-# ── Step 1: Convert raw → streamOptimized VMDK ───────────────────────────────
-log "Converting raw image → streamOptimized VMDK…"
-qemu-img convert \
-    -f raw \
-    -O vmdk \
-    -o subformat=streamOptimized \
-    "${RAW_IMG}" \
-    "${VMDK}"
+# ── Step 1: Convert raw → monolithicSparse VMDK ───────────────────────────────
+log "Converting raw image → VMDK…"
+qemu-img convert -f raw -O vmdk -o subformat=monolithicSparse \
+    "${RAW_IMG}" "${VMDK}"
+VMDK_SIZE=$(stat -c '%s' "${VMDK}")
+log "VMDK: $(numfmt --to=iec "${VMDK_SIZE}")"
 
-VMDK_BASENAME=$(basename "${VMDK}")
-VMDK_SIZE=$(wc -c < "${VMDK}")
-log "VMDK size: ${VMDK_SIZE} bytes"
+# ── Step 2: Compute SHA256 of OVF and VMDK files directly ─────────────────────
+# We hash the files before tarring. VMware validates against these exact bytes.
+# The .mf is placed BEFORE the .vmdk in the tar so VMware can validate on-the-fly.
+# Note: sha256sum outputs "<hash>  <filename>" — extract hash only with awk.
 
-# ── Step 2: Generate OVF descriptor ──────────────────────────────────────────
-log "Generating OVF descriptor…"
-
+# ── Step 3: Generate OVF descriptor ──────────────────────────────────────────
+log "Generating OVF…"
 cat > "${OVF}" << OVFEOF
 <?xml version="1.0" encoding="UTF-8"?>
-<Envelope xmlns="http://schemas.dmtf.org/ovf/envelope/1" xmlns:cim="http://schemas.dmtf.org/wbem/wscim/1/common" xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1" xmlns:rasd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData" xmlns:vmw="http://www.vmware.com/schema/ovf" xmlns:vssd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<Envelope xmlns="http://schemas.dmtf.org/ovf/envelope/1"
+          xmlns:ovf="http://schemas.dmtf.org/ovf/envelope/1"
+          xmlns:rasd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"
+          xmlns:vssd="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData"
+          xmlns:vmw="http://www.vmware.com/schema/ovf">
+
   <References>
-    <File ovf:href="${VMDK_BASENAME}" ovf:id="file1" ovf:size="${VMDK_SIZE}"/>
+    <File ovf:id="disk1" ovf:href="${VMDK_BASENAME}" ovf:size="${VMDK_SIZE}"/>
   </References>
+
   <DiskSection>
     <Info>Virtual disk information</Info>
-    <Disk ovf:capacity="${DISK_BYTES}" ovf:capacityAllocationUnits="byte" ovf:diskId="vmdisk1" ovf:fileRef="file1" ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized" ovf:populatedSize="${VMDK_SIZE}"/>
+    <Disk ovf:diskId="vmdisk1"
+          ovf:fileRef="disk1"
+          ovf:capacity="${DISK_BYTES}"
+          ovf:capacityAllocationUnits="byte"
+          ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#sparse"
+          ovf:populatedSize="${VMDK_SIZE}"/>
   </DiskSection>
+
   <NetworkSection>
-    <Info>The list of logical networks</Info>
+    <Info>Network adapters</Info>
     <Network ovf:name="VM Network">
-      <Description>Management network for the SAN Platform appliance</Description>
+      <Description>VM Network</Description>
     </Network>
   </NetworkSection>
-  <VirtualSystem ovf:id="${NAME}-${VERSION}">
-    <Info>SAN Management Platform Appliance</Info>
-    <Name>${NAME}-${VERSION}</Name>
+
+  <VirtualSystem ovf:id="${NAME}">
+    <Info>SAN Management Platform v${VERSION}</Info>
+
     <OperatingSystemSection ovf:id="101" vmw:osType="otherLinux64Guest">
-      <Info>The kind of installed guest operating system</Info>
-      <Description>Linux (Buildroot, musl, kernel 6.6 LTS)</Description>
+      <Info>Guest OS</Info>
+      <Description>Linux x86_64</Description>
     </OperatingSystemSection>
-    <ProductSection ovf:required="false">
-      <Info>SAN Platform initial configuration — read at first boot via open-vm-tools</Info>
-      <Product>SAN Management Platform</Product>
-      <Vendor>Your Organization</Vendor>
-      <Version>${VERSION}</Version>
-      <FullVersion>${VERSION}</FullVersion>
 
-      <Category>Network</Category>
-      <Property ovf:key="ip" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
-        <Label>IP Address</Label>
-        <Description>Static IPv4 address (e.g. 192.168.1.100). Leave blank for DHCP.</Description>
-      </Property>
-      <Property ovf:key="netmask" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
-        <Label>Netmask</Label>
-        <Description>Subnet mask (e.g. 255.255.255.0). Leave blank for DHCP.</Description>
-      </Property>
-      <Property ovf:key="gateway" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
-        <Label>Default Gateway</Label>
-        <Description>Default gateway IP. Leave blank for DHCP.</Description>
-      </Property>
-      <Property ovf:key="dns" ovf:type="string" ovf:userConfigurable="true" ovf:value="8.8.8.8">
-        <Label>DNS Server</Label>
-        <Description>DNS server IP address.</Description>
-      </Property>
-
-      <Category>System</Category>
-      <Property ovf:key="hostname" ovf:type="string" ovf:userConfigurable="true" ovf:value="san-platform">
-        <Label>Hostname</Label>
-        <Description>Appliance hostname.</Description>
-      </Property>
-      <Property ovf:key="admin-password" ovf:type="string" ovf:userConfigurable="true" ovf:value="Admin1234!">
-        <Label>Admin Password</Label>
-        <Description>Password for root and admin accounts. Change after first login.</Description>
-      </Property>
-      <Property ovf:key="public-keys" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
-        <Label>SSH Public Key</Label>
-        <Description>Optional SSH public key added to authorized_keys for root and admin.</Description>
-      </Property>
-
-      <Category>SAN Platform</Category>
-      <Property ovf:key="mds-host" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
-        <Label>MDS Switch IP/Hostname</Label>
-        <Description>IP or hostname of the Cisco MDS 9000 switch. Leave blank to configure later.</Description>
-      </Property>
-      <Property ovf:key="mds-username" ovf:type="string" ovf:userConfigurable="true" ovf:value="admin">
-        <Label>MDS Username</Label>
-        <Description>Admin username for MDS switch authentication.</Description>
-      </Property>
-      <Property ovf:key="mds-password" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
-        <Label>MDS Password</Label>
-        <Description>Admin password for MDS switch authentication.</Description>
-      </Property>
-    </ProductSection>
     <VirtualHardwareSection>
-      <Info>Virtual hardware requirements</Info>
-      <System>
+      <Info>Virtual hardware</Info>
+      <ovf:System>
         <vssd:ElementName>Virtual Hardware Family</vssd:ElementName>
         <vssd:InstanceID>0</vssd:InstanceID>
-        <vssd:VirtualSystemIdentifier>${NAME}-${VERSION}</vssd:VirtualSystemIdentifier>
+        <vssd:VirtualSystemIdentifier>${NAME}</vssd:VirtualSystemIdentifier>
         <vssd:VirtualSystemType>vmx-19</vssd:VirtualSystemType>
-      </System>
-      <Item>
-        <rasd:AllocationUnits>hertz * 10^6</rasd:AllocationUnits>
-        <rasd:Description>Number of Virtual CPUs</rasd:Description>
-        <rasd:ElementName>2 virtual CPU(s)</rasd:ElementName>
+      </ovf:System>
+
+      <ovf:Item>
+        <rasd:Description>Number of CPUs</rasd:Description>
+        <rasd:ElementName>2 vCPU</rasd:ElementName>
         <rasd:InstanceID>1</rasd:InstanceID>
         <rasd:ResourceType>3</rasd:ResourceType>
         <rasd:VirtualQuantity>2</rasd:VirtualQuantity>
-      </Item>
-      <Item>
+      </ovf:Item>
+
+      <ovf:Item>
         <rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>
-        <rasd:Description>Memory Size</rasd:Description>
-        <rasd:ElementName>2048 MB of memory</rasd:ElementName>
+        <rasd:Description>RAM</rasd:Description>
+        <rasd:ElementName>2048 MB RAM</rasd:ElementName>
         <rasd:InstanceID>2</rasd:InstanceID>
         <rasd:ResourceType>4</rasd:ResourceType>
         <rasd:VirtualQuantity>2048</rasd:VirtualQuantity>
-      </Item>
-      <Item>
-        <rasd:Address>0</rasd:Address>
+      </ovf:Item>
+
+      <ovf:Item>
         <rasd:Description>SATA Controller</rasd:Description>
-        <rasd:ElementName>SATA Controller 0</rasd:ElementName>
+        <rasd:ElementName>SATA controller 0</rasd:ElementName>
         <rasd:InstanceID>3</rasd:InstanceID>
         <rasd:ResourceSubType>vmware.sata.ahci</rasd:ResourceSubType>
         <rasd:ResourceType>20</rasd:ResourceType>
-      </Item>
-      <Item>
+      </ovf:Item>
+
+      <ovf:Item>
         <rasd:AddressOnParent>0</rasd:AddressOnParent>
-        <rasd:ElementName>Hard Disk 1</rasd:ElementName>
+        <rasd:ElementName>Hard disk 1</rasd:ElementName>
         <rasd:HostResource>ovf:/disk/vmdisk1</rasd:HostResource>
         <rasd:InstanceID>4</rasd:InstanceID>
         <rasd:Parent>3</rasd:Parent>
         <rasd:ResourceType>17</rasd:ResourceType>
-        <vmw:Config ovf:required="false" vmw:key="backing.writeThrough" vmw:value="false"/>
-      </Item>
-      <Item>
-        <rasd:AddressOnParent>7</rasd:AddressOnParent>
+      </ovf:Item>
+
+      <ovf:Item>
+        <rasd:AddressOnParent>0</rasd:AddressOnParent>
         <rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>
         <rasd:Connection>VM Network</rasd:Connection>
-        <rasd:Description>VmxNet3 ethernet adapter on &quot;VM Network&quot;</rasd:Description>
-        <rasd:ElementName>Ethernet 1</rasd:ElementName>
+        <rasd:Description>VMXNET3 NIC</rasd:Description>
+        <rasd:ElementName>Network adapter 1</rasd:ElementName>
         <rasd:InstanceID>5</rasd:InstanceID>
-        <rasd:ResourceSubType>VmxNet3</rasd:ResourceSubType>
+        <rasd:ResourceSubType>VMXNET3</rasd:ResourceSubType>
         <rasd:ResourceType>10</rasd:ResourceType>
-        <vmw:Config ovf:required="false" vmw:key="wakeOnLanEnabled" vmw:value="true"/>
-      </Item>
-      <Item ovf:required="false">
-        <rasd:AutomaticAllocation>false</rasd:AutomaticAllocation>
-        <rasd:ElementName>serial0</rasd:ElementName>
-        <rasd:InstanceID>6</rasd:InstanceID>
-        <rasd:ResourceSubType>vmware.serialport.device</rasd:ResourceSubType>
-        <rasd:ResourceType>21</rasd:ResourceType>
-        <vmw:Config ovf:required="false" vmw:key="yieldOnPoll" vmw:value="false"/>
-      </Item>
+      </ovf:Item>
+
       <vmw:Config ovf:required="false" vmw:key="firmware" vmw:value="efi"/>
       <vmw:Config ovf:required="false" vmw:key="uefi.secureBoot.enabled" vmw:value="false"/>
-      <vmw:Config ovf:required="false" vmw:key="cpuHotAddEnabled" vmw:value="false"/>
-      <vmw:Config ovf:required="false" vmw:key="memoryHotAddEnabled" vmw:value="false"/>
-      <vmw:Config ovf:required="false" vmw:key="tools.syncTimeWithHost" vmw:value="false"/>
-      <vmw:Config ovf:required="false" vmw:key="powerOpInfo.powerOffType" vmw:value="preset"/>
-      <vmw:Config ovf:required="false" vmw:key="powerOpInfo.resetType" vmw:value="preset"/>
+
     </VirtualHardwareSection>
   </VirtualSystem>
 </Envelope>
 OVFEOF
 
-log "OVF generated ($(wc -l < "${OVF}") lines)"
+log "OVF: $(wc -l < "${OVF}") lines, $(stat -c '%s' "${OVF}") bytes"
 
-# ── Step 3: Bundle OVF + VMDK first, then hash from tar stream ───────────────
-# VMware validates the SHA256 of each member AS READ FROM THE TAR stream.
-# With streamOptimized VMDK, tar padding can change the byte sequence vs the
-# raw file. Hashing via "tar -xOf" gives the exact bytes VMware will verify.
-log "Bundling OVF + VMDK (pre-manifest)…"
-tar -cf "${OUTPUT_OVA}" \
-    -C "${TMPDIR_OVA}" \
-    "${NAME}.ovf" \
-    "${VMDK_BASENAME}"
+# ── Step 4: Generate SHA256 manifest ─────────────────────────────────────────
+# Hash the files directly. The .mf goes into the tar BEFORE the .vmdk so
+# VMware can read the manifest first and then validate the disk on-the-fly.
+log "Computing SHA256…"
+OVF_SHA=$(sha256sum  "${OVF}"  | awk '{print $1}')
+VMDK_SHA=$(sha256sum "${VMDK}" | awk '{print $1}')
 
-# ── Step 4: Hash each member from the tar stream ──────────────────────────────
-log "Computing SHA256 from tar stream…"
-OVF_SUM=$(tar  -xOf "${OUTPUT_OVA}" "${NAME}.ovf"      | sha256sum | cut -d ' ' -f1)
-VMDK_SUM=$(tar -xOf "${OUTPUT_OVA}" "${VMDK_BASENAME}" | sha256sum | cut -d ' ' -f1)
+log "OVF  SHA256: ${OVF_SHA}"
+log "VMDK SHA256: ${VMDK_SHA}"
 
-printf 'SHA256(%s)= %s\n' "${NAME}.ovf"      "${OVF_SUM}"  > "${MF}"
-printf 'SHA256(%s)= %s\n' "${VMDK_BASENAME}" "${VMDK_SUM}" >> "${MF}"
+# Validate hash lengths (must be exactly 64 hex chars)
+[ "${#OVF_SHA}"  -eq 64 ] || die "OVF SHA256 wrong length: ${#OVF_SHA}"
+[ "${#VMDK_SHA}" -eq 64 ] || die "VMDK SHA256 wrong length: ${#VMDK_SHA}"
+
+{
+    printf 'SHA256(%s)= %s\n' "${NAME}.ovf"      "${OVF_SHA}"
+    printf 'SHA256(%s)= %s\n' "${VMDK_BASENAME}" "${VMDK_SHA}"
+} > "${MF}"
 
 log "Manifest:"
 cat "${MF}"
 
-# ── Step 5: Append manifest as the final tar member ───────────────────────────
-tar -rf "${OUTPUT_OVA}" -C "${TMPDIR_OVA}" "${NAME}.mf"
+# ── Step 5: Bundle as OVA ─────────────────────────────────────────────────────
+# Order: ovf → mf → vmdk  (VMware reads manifest before disk to validate)
+log "Creating OVA tar (order: ovf → mf → vmdk)…"
+tar -cf "${OUTPUT_OVA}" \
+    -C "${TMPDIR_OVA}" \
+    "${NAME}.ovf" \
+    "${NAME}.mf" \
+    "${VMDK_BASENAME}"
 
-log "OVA assembled: ${OUTPUT_OVA}"
-ls -lh "${OUTPUT_OVA}"
+log "OVA: $(ls -lh "${OUTPUT_OVA}" | awk '{print $5, $9}')"
