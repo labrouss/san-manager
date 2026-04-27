@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
 # scripts/pack-ova.sh
-# Converts a raw disk image to an OVA importable by VMware Workstation/ESXi.
+# Converts a raw disk image to a VMware-importable OVA.
 #
-# Usage: pack-ova.sh <raw-disk.img> <output.ova> <version> <disk-size-mb>
-#
-# OVA tar member order (required by OVF spec + VMware):
-#   1. .ovf   — descriptor
-#   2. .mf    — SHA256 manifest
-#   3. .vmdk  — disk image
+# Usage: pack-ova.sh <raw-disk.img> <output.ova> <version>
 # =============================================================================
 set -euo pipefail
 
-RAW_IMG="${1:?Usage: pack-ova.sh <raw.img> <output.ova> <version> <disk-mb>}"
+RAW_IMG="${1:?Usage: pack-ova.sh <raw.img> <output.ova> <version>}"
 OUTPUT_OVA="${2:?}"
 VERSION="${3:?}"
-DISK_MB="${4:-8192}"
 
 TMPDIR_OVA=$(mktemp -d /tmp/ova-XXXXXX)
 trap 'rm -rf "${TMPDIR_OVA}"' EXIT
@@ -30,19 +24,22 @@ OVF="${TMPDIR_OVA}/${NAME}.ovf"
 VMDK="${TMPDIR_OVA}/${NAME}-disk.vmdk"
 MF="${TMPDIR_OVA}/${NAME}.mf"
 VMDK_BASENAME=$(basename "${VMDK}")
-DISK_BYTES=$(( DISK_MB * 1024 * 1024 ))
 
-# ── Step 1: Convert raw → monolithicSparse VMDK ───────────────────────────────
-log "Converting raw image → VMDK…"
-qemu-img convert -f raw -O vmdk -o subformat=monolithicSparse \
+# ── Step 1: Convert raw → streamOptimized VMDK (OVA-correct format) ──────────
+log "Converting raw image → streamOptimized VMDK…"
+qemu-img convert \
+    -f raw \
+    -O vmdk \
+    -o subformat=streamOptimized \
     "${RAW_IMG}" "${VMDK}"
-VMDK_SIZE=$(stat -c '%s' "${VMDK}")
-log "VMDK: $(numfmt --to=iec "${VMDK_SIZE}")"
 
-# ── Step 2: Compute SHA256 of OVF and VMDK files directly ─────────────────────
-# We hash the files before tarring. VMware validates against these exact bytes.
-# The .mf is placed BEFORE the .vmdk in the tar so VMware can validate on-the-fly.
-# Note: sha256sum outputs "<hash>  <filename>" — extract hash only with awk.
+VMDK_SIZE=$(stat -c '%s' "${VMDK}")
+log "VMDK file size: ${VMDK_SIZE} bytes"
+
+# ── Step 2: Get actual virtual disk capacity from VMDK metadata ───────────────
+DISK_BYTES=$(qemu-img info --output=json "${VMDK}" | jq -r '.["virtual-size"]')
+[ -n "${DISK_BYTES}" ] || die "Failed to detect VMDK virtual size"
+log "VMDK virtual capacity: ${DISK_BYTES} bytes"
 
 # ── Step 3: Generate OVF descriptor ──────────────────────────────────────────
 log "Generating OVF…"
@@ -59,12 +56,12 @@ cat > "${OVF}" << OVFEOF
   </References>
 
   <DiskSection>
-    <Info>Virtual disk information</Info>
+    <Info>Virtual disk</Info>
     <Disk ovf:diskId="vmdisk1"
           ovf:fileRef="disk1"
           ovf:capacity="${DISK_BYTES}"
           ovf:capacityAllocationUnits="byte"
-          ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#sparse"
+          ovf:format="http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized"
           ovf:populatedSize="${VMDK_SIZE}"/>
   </DiskSection>
 
@@ -93,73 +90,56 @@ cat > "${OVF}" << OVFEOF
       </ovf:System>
 
       <ovf:Item>
-        <rasd:Description>Number of CPUs</rasd:Description>
-        <rasd:ElementName>2 vCPU</rasd:ElementName>
         <rasd:InstanceID>1</rasd:InstanceID>
         <rasd:ResourceType>3</rasd:ResourceType>
         <rasd:VirtualQuantity>2</rasd:VirtualQuantity>
       </ovf:Item>
 
       <ovf:Item>
-        <rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>
-        <rasd:Description>RAM</rasd:Description>
-        <rasd:ElementName>2048 MB RAM</rasd:ElementName>
         <rasd:InstanceID>2</rasd:InstanceID>
         <rasd:ResourceType>4</rasd:ResourceType>
         <rasd:VirtualQuantity>2048</rasd:VirtualQuantity>
+        <rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>
       </ovf:Item>
 
       <ovf:Item>
-        <rasd:Description>SATA Controller</rasd:Description>
-        <rasd:ElementName>SATA controller 0</rasd:ElementName>
         <rasd:InstanceID>3</rasd:InstanceID>
-        <rasd:ResourceSubType>vmware.sata.ahci</rasd:ResourceSubType>
         <rasd:ResourceType>20</rasd:ResourceType>
+        <rasd:ResourceSubType>vmware.sata.ahci</rasd:ResourceSubType>
       </ovf:Item>
 
       <ovf:Item>
-        <rasd:AddressOnParent>0</rasd:AddressOnParent>
-        <rasd:ElementName>Hard disk 1</rasd:ElementName>
-        <rasd:HostResource>ovf:/disk/vmdisk1</rasd:HostResource>
         <rasd:InstanceID>4</rasd:InstanceID>
-        <rasd:Parent>3</rasd:Parent>
         <rasd:ResourceType>17</rasd:ResourceType>
+        <rasd:Parent>3</rasd:Parent>
+        <rasd:AddressOnParent>0</rasd:AddressOnParent>
+        <rasd:HostResource>ovf:/disk/vmdisk1</rasd:HostResource>
       </ovf:Item>
 
       <ovf:Item>
-        <rasd:AddressOnParent>0</rasd:AddressOnParent>
-        <rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>
-        <rasd:Connection>VM Network</rasd:Connection>
-        <rasd:Description>VMXNET3 NIC</rasd:Description>
-        <rasd:ElementName>Network adapter 1</rasd:ElementName>
         <rasd:InstanceID>5</rasd:InstanceID>
-        <rasd:ResourceSubType>VMXNET3</rasd:ResourceSubType>
         <rasd:ResourceType>10</rasd:ResourceType>
+        <rasd:ResourceSubType>VMXNET3</rasd:ResourceSubType>
+        <rasd:Connection>VM Network</rasd:Connection>
       </ovf:Item>
 
-      <vmw:Config ovf:required="false" vmw:key="firmware" vmw:value="efi"/>
-      <vmw:Config ovf:required="false" vmw:key="uefi.secureBoot.enabled" vmw:value="false"/>
+      <vmw:Config vmw:key="firmware" vmw:value="efi"/>
+      <vmw:Config vmw:key="uefi.secureBoot.enabled" vmw:value="false"/>
 
     </VirtualHardwareSection>
   </VirtualSystem>
 </Envelope>
 OVFEOF
 
-log "OVF: $(wc -l < "${OVF}") lines, $(stat -c '%s' "${OVF}") bytes"
+log "OVF: $(wc -c < "${OVF}") bytes"
 
 # ── Step 4: Generate SHA256 manifest ─────────────────────────────────────────
-# Hash the files directly. The .mf goes into the tar BEFORE the .vmdk so
-# VMware can read the manifest first and then validate the disk on-the-fly.
 log "Computing SHA256…"
 OVF_SHA=$(sha256sum  "${OVF}"  | awk '{print $1}')
 VMDK_SHA=$(sha256sum "${VMDK}" | awk '{print $1}')
 
-log "OVF  SHA256: ${OVF_SHA}"
-log "VMDK SHA256: ${VMDK_SHA}"
-
-# Validate hash lengths (must be exactly 64 hex chars)
-[ "${#OVF_SHA}"  -eq 64 ] || die "OVF SHA256 wrong length: ${#OVF_SHA}"
-[ "${#VMDK_SHA}" -eq 64 ] || die "VMDK SHA256 wrong length: ${#VMDK_SHA}"
+[ "${#OVF_SHA}"  -eq 64 ] || die "OVF SHA256 wrong length (${#OVF_SHA})"
+[ "${#VMDK_SHA}" -eq 64 ] || die "VMDK SHA256 wrong length (${#VMDK_SHA})"
 
 {
     printf 'SHA256(%s)= %s\n' "${NAME}.ovf"      "${OVF_SHA}"
@@ -169,13 +149,19 @@ log "VMDK SHA256: ${VMDK_SHA}"
 log "Manifest:"
 cat "${MF}"
 
-# ── Step 5: Bundle as OVA ─────────────────────────────────────────────────────
-# Order: ovf → mf → vmdk  (VMware reads manifest before disk to validate)
-log "Creating OVA tar (order: ovf → mf → vmdk)…"
-tar -cf "${OUTPUT_OVA}" \
+# ── Step 5: Create OVA with ustar format ─────────────────────────────────────
+# --format=ustar    : plain POSIX tar, no GNU extensions — VMware requires this
+# --numeric-owner   : no user/group name strings in headers
+# --owner=0 --group=0 : root ownership in tar headers
+# Member order: ovf → mf → vmdk  (manifest before disk for streaming validation)
+log "Creating OVA (ustar format: ovf → mf → vmdk)…"
+tar --format=ustar \
+    --numeric-owner \
+    --owner=0 --group=0 \
+    -cf "${OUTPUT_OVA}" \
     -C "${TMPDIR_OVA}" \
     "${NAME}.ovf" \
     "${NAME}.mf" \
     "${VMDK_BASENAME}"
 
-log "OVA: $(ls -lh "${OUTPUT_OVA}" | awk '{print $5, $9}')"
+log "OVA created: ${OUTPUT_OVA} ($(ls -lh "${OUTPUT_OVA}" | awk '{print $5}'))"
