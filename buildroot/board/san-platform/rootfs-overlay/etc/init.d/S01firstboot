@@ -14,6 +14,12 @@ start() {
 
     echo "Running first-boot initialization..."
 
+    # Read OVF deployment properties from VMware (if available)
+    # This allows zero-touch deployment when deploying via vSphere/Workstation
+    if [ -x /opt/san-platform/bin/read-ovf-properties.sh ]; then
+        /opt/san-platform/bin/read-ovf-properties.sh
+    fi
+
     # Resize root partition to fill available disk space
     # sda2 = GPT partition 2 = root ext4
     if command -v resize2fs > /dev/null 2>&1; then

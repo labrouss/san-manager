@@ -70,22 +70,56 @@ cat > "${OVF}" << OVFEOF
       <Description>Linux (Buildroot, musl, kernel 6.6 LTS)</Description>
     </OperatingSystemSection>
     <ProductSection ovf:required="false">
-      <Info>SAN Platform product configuration</Info>
+      <Info>SAN Platform initial configuration — read at first boot via open-vm-tools</Info>
       <Product>SAN Management Platform</Product>
       <Vendor>Your Organization</Vendor>
       <Version>${VERSION}</Version>
       <FullVersion>${VERSION}</FullVersion>
+
+      <Category>Network</Category>
+      <Property ovf:key="ip" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
+        <Label>IP Address</Label>
+        <Description>Static IPv4 address (e.g. 192.168.1.100). Leave blank for DHCP.</Description>
+      </Property>
+      <Property ovf:key="netmask" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
+        <Label>Netmask</Label>
+        <Description>Subnet mask (e.g. 255.255.255.0). Leave blank for DHCP.</Description>
+      </Property>
+      <Property ovf:key="gateway" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
+        <Label>Default Gateway</Label>
+        <Description>Default gateway IP. Leave blank for DHCP.</Description>
+      </Property>
+      <Property ovf:key="dns" ovf:type="string" ovf:userConfigurable="true" ovf:value="8.8.8.8">
+        <Label>DNS Server</Label>
+        <Description>DNS server IP address.</Description>
+      </Property>
+
+      <Category>System</Category>
       <Property ovf:key="hostname" ovf:type="string" ovf:userConfigurable="true" ovf:value="san-platform">
-        <Label>Appliance hostname</Label>
-        <Description>Hostname for the SAN Platform appliance</Description>
+        <Label>Hostname</Label>
+        <Description>Appliance hostname.</Description>
       </Property>
       <Property ovf:key="admin-password" ovf:type="string" ovf:userConfigurable="true" ovf:value="Admin1234!">
-        <Label>Admin password</Label>
+        <Label>Admin Password</Label>
         <Description>Password for root and admin accounts. Change after first login.</Description>
       </Property>
       <Property ovf:key="public-keys" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
-        <Label>SSH public keys</Label>
-        <Description>Optional: paste an SSH public key to add to /root/.ssh/authorized_keys and /home/admin/.ssh/authorized_keys</Description>
+        <Label>SSH Public Key</Label>
+        <Description>Optional SSH public key added to authorized_keys for root and admin.</Description>
+      </Property>
+
+      <Category>SAN Platform</Category>
+      <Property ovf:key="mds-host" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
+        <Label>MDS Switch IP/Hostname</Label>
+        <Description>IP or hostname of the Cisco MDS 9000 switch. Leave blank to configure later.</Description>
+      </Property>
+      <Property ovf:key="mds-username" ovf:type="string" ovf:userConfigurable="true" ovf:value="admin">
+        <Label>MDS Username</Label>
+        <Description>Admin username for MDS switch authentication.</Description>
+      </Property>
+      <Property ovf:key="mds-password" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
+        <Label>MDS Password</Label>
+        <Description>Admin password for MDS switch authentication.</Description>
       </Property>
     </ProductSection>
     <VirtualHardwareSection>
@@ -162,28 +196,29 @@ OVFEOF
 
 log "OVF generated ($(wc -l < "${OVF}") lines)"
 
-# ── Step 3: Generate SHA256 manifest from files on disk ───────────────────────
-# Reference script hashes files directly then writes manifest before tar.
-log "Generating manifest…"
-VMDK_SUM=$(sha256sum "${VMDK}" | cut -d ' ' -f1)
-OVF_SUM=$(sha256sum "${OVF}"   | cut -d ' ' -f1)
+# ── Step 3: Bundle OVF + VMDK first, then hash from tar stream ───────────────
+# VMware validates the SHA256 of each member AS READ FROM THE TAR stream.
+# With streamOptimized VMDK, tar padding can change the byte sequence vs the
+# raw file. Hashing via "tar -xOf" gives the exact bytes VMware will verify.
+log "Bundling OVF + VMDK (pre-manifest)…"
+tar -cf "${OUTPUT_OVA}" \
+    -C "${TMPDIR_OVA}" \
+    "${NAME}.ovf" \
+    "${VMDK_BASENAME}"
 
-cat > "${MF}" << MFEOF
-SHA256(${VMDK_BASENAME})= ${VMDK_SUM}
-SHA256(${NAME}.ovf)= ${OVF_SUM}
-MFEOF
+# ── Step 4: Hash each member from the tar stream ──────────────────────────────
+log "Computing SHA256 from tar stream…"
+OVF_SUM=$(tar  -xOf "${OUTPUT_OVA}" "${NAME}.ovf"      | sha256sum | cut -d ' ' -f1)
+VMDK_SUM=$(tar -xOf "${OUTPUT_OVA}" "${VMDK_BASENAME}" | sha256sum | cut -d ' ' -f1)
+
+printf 'SHA256(%s)= %s\n' "${NAME}.ovf"      "${OVF_SUM}"  > "${MF}"
+printf 'SHA256(%s)= %s\n' "${VMDK_BASENAME}" "${VMDK_SUM}" >> "${MF}"
 
 log "Manifest:"
 cat "${MF}"
 
-# ── Step 4: Bundle OVA — order: .ovf, .mf, .vmdk ─────────────────────────────
-# Reference script uses this exact order (manifest before disk image).
-log "Bundling OVA…"
-tar -vcf "${OUTPUT_OVA}" \
-    -C "${TMPDIR_OVA}" \
-    "${NAME}.ovf" \
-    "${NAME}.mf" \
-    "${VMDK_BASENAME}"
+# ── Step 5: Append manifest as the final tar member ───────────────────────────
+tar -rf "${OUTPUT_OVA}" -C "${TMPDIR_OVA}" "${NAME}.mf"
 
 log "OVA assembled: ${OUTPUT_OVA}"
 ls -lh "${OUTPUT_OVA}"

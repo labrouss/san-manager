@@ -105,3 +105,11 @@ BR2_CCACHE=y
 #   - provide interactive GRUB shell  (normal, ls, cat, echo)
 #   - support video/gfx terminal      (all_video, gfxterm, font)
 #   - search for disks by UUID/label  (search, search_fs_uuid, search_label)
+
+# ── open-vm-tools — VMware guest integration + OVF property reading ───────────
+BR2_PACKAGE_OPEN_VM_TOOLS=y
+BR2_PACKAGE_OPEN_VM_TOOLS_SCRIPTS=y
+# Dependencies
+BR2_PACKAGE_LIBGLIB2=y
+BR2_PACKAGE_UTIL_LINUX_LIBBLKID=y
+BR2_PACKAGE_UTIL_LINUX_LIBUUID=y
