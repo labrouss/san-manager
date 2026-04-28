@@ -147,7 +147,7 @@ git push origin v1.2.3
 
 ## Deploying the OVA
 
-### VMware ESXi / vSphere
+### VMware ESXi / vSphere (recommended)
 1. **Deploy OVF Template** → select `san-platform-<version>.ova`
 2. Configure network (DHCP by default)
 3. Power on
@@ -155,7 +155,28 @@ git push origin v1.2.3
 5. Browse to `http://<vm-ip>:8080`
 
 ### VMware Workstation / Fusion
-File → Import → select the OVA
+VMware Workstation's OVF compliance checker is stricter than ESXi and will
+reject the OVA at import time with element validation errors. Use this
+workaround:
+
+1. Extract the OVA (it is a plain tar archive):
+   ```bash
+   mkdir san-platform-ova && cd san-platform-ova
+   tar xvf ../san-platform-<version>.ova
+   ```
+2. **Delete the `.mf` manifest file** from the extracted directory:
+   ```bash
+   rm san-platform.mf
+   ```
+3. In VMware Workstation: **File → Open** → select `san-platform.ovf`
+   (not the `.ova` — use the `.ovf` file directly)
+4. Workstation will import the OVF without the manifest validation step.
+5. Power on the VM and proceed normally.
+
+> **Why?** The OVA is generated with `--format=ustar` which ESXi handles
+> correctly. VMware Workstation's OVF parser applies additional element
+> conformance checks that reject items it considers non-standard, even when
+> the OVF is technically valid per the DMTF OVF 1.1 specification.
 
 ### VirtualBox
 File → Import Appliance → select the OVA
